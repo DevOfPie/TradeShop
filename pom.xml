@@ -172,6 +172,28 @@
                 <configuration>
                     <source>1.8</source>
                     <target>1.8</target>
+                    <!-- Main sources are left on 1.8 for this branch; the Java bump is
+                         being done separately. Tests need 21 for current MockBukkit. -->
+                    <testSource>21</testSource>
+                    <testTarget>21</testTarget>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.2.5</version>
+                <configuration>
+                    <!-- A fresh JVM per test class. TradeShop caches plugin state in
+                         statics and in its data store, which outlive MockBukkit's
+                         unmock(), so a second scenario in the same JVM silently
+                         inherits the first one's world. -->
+                    <reuseForks>false</reuseForks>
+                    <forkCount>1</forkCount>
+                    <systemPropertyVariables>
+                        <!-- bStats refuses to start unless the shade plugin relocated it,
+                             which does not happen when tests run against target/classes. -->
+                        <bstats.relocatecheck>false</bstats.relocatecheck>
+                    </systemPropertyVariables>
                 </configuration>
             </plugin>
             <plugin>
@@ -268,6 +290,19 @@
     </repositories>
 
     <dependencies>
+        <!-- paper-api is declared first deliberately. Both jars ship org.bukkit.*,
+             and Maven puts them on the classpath in declaration order, so whichever
+             comes first wins. Paper's copy is a superset of Spigot's; with Spigot
+             first, anything Paper-only resolves to a class that is not there. -->
+        <dependency>
+            <groupId>io.papermc.paper</groupId>
+            <artifactId>paper-api</artifactId>
+            <!-- 1.20.1 was pinned to an exact snapshot that PaperMC has since purged,
+                 so the project no longer built from a clean cache. 1.20.6 is also what
+                 MockBukkit 3.93.2 is compiled against. -->
+            <version>1.20.6-R0.1-SNAPSHOT</version>
+        </dependency>
+
         <dependency>
             <groupId>org.spigotmc</groupId>
             <artifactId>spigot-api</artifactId>
@@ -303,9 +338,17 @@
         </dependency>
 
         <dependency>
-            <groupId>io.papermc.paper</groupId>
-            <artifactId>paper-api</artifactId>
-            <version>1.20.1-R0.1-20230627.215235-38</version>
+            <groupId>com.github.seeseemelk</groupId>
+            <artifactId>MockBukkit-v1.20</artifactId>
+            <version>3.93.2</version>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>5.10.2</version>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 
