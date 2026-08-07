@@ -1,8 +1,15 @@
-# Proposed workflows
+# CI, and the route for workflow changes
 
-Changes to `.github/workflows/` are written here and applied by the owner. This
-file says why, what belongs here rather than in `ci/`, and how a proposal is
-applied.
+Changes to `.github/workflows/` are written to `ci/proposed/` and applied by the
+owner. This file says why, what belongs where, and how a proposal is applied.
+
+**`ci/proposed/` holds proposal files and nothing else.** This contract sits one
+level up, deliberately. It first lived inside `proposed/`, and the first apply
+moved the whole directory — reasonably, since the instruction was "move the
+proposed CI changes" and this file was sitting in among them. Everything in
+`proposed/` is now something that belongs in `.github/workflows/`, so moving all
+of it is correct rather than a mistake waiting to happen. That is the fix; a
+warning telling people not to move the README would have been the other kind.
 
 The process is [LinkCtrl's](https://github.com/DevOfPie/LinkCtrl), adopted here
 on 2026-08-07 because this repository hit the identical wall. Nothing about it
@@ -65,7 +72,10 @@ pending proposal is a normal state.
 
 ## Applying one
 
-From a checkout with the owner's credentials:
+From a checkout with the owner's credentials. **The destination is
+`.github/workflows/` — that exact path and no other.** GitHub runs workflows
+from there and nowhere else, and a `.yml` under `.github/ISSUE_TEMPLATE/` is not
+a workflow that fails loudly, it is a workflow that silently does not exist.
 
 ```sh
 cp ci/proposed/maven.yml .github/workflows/maven.yml
@@ -73,6 +83,12 @@ sh ci/workflow-proposals.sh          # must now report: applied
 git add .github/workflows/maven.yml
 git commit
 ```
+
+**Run the checker before pushing.** It is the entire safety net on this step —
+it reports `applied` only when a file exists at the live path *and* matches, so
+a copy that went elsewhere still reads `pending`. On the first apply, WC1 landed
+in `.github/ISSUE_TEMPLATE/workflows/`, the checker was not run, and the branch
+pushed green carrying no installed workflow and nothing to say so.
 
 One `cp` and nothing else. The dead `maven.yml.old` was already removed by the
 branch that raised this proposal, because GitHub's guard is on the **workflow
