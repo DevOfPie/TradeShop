@@ -34,10 +34,17 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # JDK 17, not 8. The pom compiles -source/-target 1.8, but spigot-api 1.21.1
-  # ships Java 17 bytecode (class major version 61) and a JDK 8 javac cannot
-  # read it. maven.yml.old pinned 1.8 and would have failed here.
-  JAVA_VERSION: "17"
+  # JDK 21, raised from 17 because the test suite needs it: MockBukkit's v1.21
+  # line is compiled for 21, so pom.xml sets <testRelease>21</testRelease> and a
+  # JDK 17 javac fails testCompile outright with "release version 21 not
+  # supported". Main is unaffected — it still compiles -source/-target 1.8.
+  #
+  # 21 is also what the plugin's own users run: Minecraft 1.20.5 and later
+  # require a Java 21 runtime, so testing on 21 tests the JVM the jar meets.
+  #
+  # Still not 8, for the original reason: spigot-api 1.21.1 ships Java 17
+  # bytecode (class major version 61) and a JDK 8 javac cannot read it.
+  JAVA_VERSION: "21"
 
 jobs:
   build:
