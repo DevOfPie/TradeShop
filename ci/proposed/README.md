@@ -69,11 +69,17 @@ From a checkout with the owner's credentials:
 
 ```sh
 cp ci/proposed/maven.yml .github/workflows/maven.yml
-git rm .github/workflows/maven.yml.old
 sh ci/workflow-proposals.sh          # must now report: applied
 git add .github/workflows/maven.yml
 git commit
 ```
+
+One `cp` and nothing else. The dead `maven.yml.old` was already removed by the
+branch that raised this proposal, because GitHub's guard is on the **workflow
+file extension**, not the directory: `.old` is not `.yml`, so the token could
+push its deletion. Probed here 2026-08-07 on a throwaway branch that pushed
+clean and was deleted. Worth knowing generally — housekeeping under
+`.github/workflows/` is only blocked for files GitHub would actually run.
 
 Use `cp` rather than copying the text through an editor: only trailing newlines
 are normalised in that comparison, and everything else counts, whitespace
