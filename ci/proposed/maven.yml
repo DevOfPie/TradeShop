@@ -1,0 +1,54 @@
+# The checks every change has to pass.
+#
+# Every step here calls a script under ci/. What a step *does* therefore lives
+# in that script, which is writable by whoever is building this repository; what
+# a step *is* — the triggers, the permissions block, the JDK, the pinned
+# actions — lives here, and changing it needs the owner. That split is the whole
+# point of the file, and ci/README.md is where it is argued.
+#
+# Triggers are branch-agnostic on purpose. Naming a branch here means CI stops
+# firing the moment work moves to another one, and moving the branch back needs
+# a manual step from the owner — which is the most expensive way possible to
+# discover that a gate went quiet. A gate that only guards the branch somebody
+# remembered to name is not a gate.
+#
+# What this does not change: it still publishes nothing — Jenkins remains the
+# publisher for repo.killerofpie.com and this file writes no artifact anywhere.
+# `permissions:` is still contents: read. There is still no schedule: and no
+# workflow_dispatch:, so it cannot run except in response to a push or a pull
+# request. What it does change is which branches that covers: all of them,
+# instead of 2.6.2-revert-save alone.
+
+name: Build
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # JDK 17, not 8. The pom compiles -source/-target 1.8, but spigot-api 1.21.1
+  # ships Java 17 bytecode (class major version 61) and a JDK 8 javac cannot
+  # read it. maven.yml.old pinned 1.8 and would have failed here.
+  JAVA_VERSION: "17"
+
+jobs:
+  build:
+    name: Build and shade
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+      - name: Build
+        run: sh ci/build.sh
