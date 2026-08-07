@@ -172,7 +172,104 @@
                 <configuration>
                     <source>1.8</source>
                     <target>1.8</target>
+                    <!-- Main sources stay on 1.8; that is a separate decision from
+                         testing. MockBukkit and the paper-api it pulls in are compiled
+                         for 21, so the test sources have to be too. -->
+                    <testRelease>21</testRelease>
                 </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.2.5</version>
+                <configuration>
+                    <!-- One JVM for the whole suite. The harness mocks Bukkit once per
+                         JVM rather than per class, because the plugin caches its own
+                         instance in static finals that a second mock/unmock cycle
+                         cannot refresh. See MockBukkitEnvironment. -->
+                    <reuseForks>true</reuseForks>
+                    <forkCount>1</forkCount>
+                    <!-- The test JVM runs against paper-api 1.21.1 instead of the 1.20.1
+                         the project declares. This is a surefire-only substitution on
+                         purpose: the dependency block, the compile classpath and the
+                         shaded jar are all untouched, so nothing about what TradeShop
+                         builds or ships changes.
+
+                         It is needed because the declared versions do not agree with each
+                         other. spigot-api is 1.21.1 and is declared first, so org.bukkit.*
+                         comes from 1.21.1 at both compile and run time, while paper-api
+                         sits at 1.20.1 supplying only io.papermc.paper.*. MockBukkit has to
+                         match the Bukkit it is driving, and its 1.21 line reaches for
+                         io.papermc.paper.plugin.lifecycle, which 1.20.1 does not have:
+                         NoClassDefFoundError before a single test body runs.
+
+                         spigot-api is dropped for the same run, and paper-api 1.21.1
+                         supplies org.bukkit.* in its place. Both jars ship that package,
+                         so only the first one on the classpath is ever used; Paper's copy
+                         is Spigot's with patches on top, and MockBukkit is built against
+                         the patched one. Leaving Spigot first gets as far as
+                         MockCommandMap and then dies on a SimpleCommandMap constructor
+                         that only Paper has.
+
+                         Aligning the declaration is the real fix and belongs in its own
+                         change with its own review. -->
+                    <classpathDependencyExcludes>
+                        <classpathDependencyExclude>io.papermc.paper:paper-api</classpathDependencyExclude>
+                        <classpathDependencyExclude>org.spigotmc:spigot-api</classpathDependencyExclude>
+                    </classpathDependencyExcludes>
+                    <additionalClasspathDependencies>
+                        <dependency>
+                            <groupId>io.papermc.paper</groupId>
+                            <artifactId>paper-api</artifactId>
+                            <version>1.21.1-R0.1-SNAPSHOT</version>
+                        </dependency>
+                    </additionalClasspathDependencies>
+                    <systemPropertyVariables>
+                        <!-- bStats refuses to start unless the shade plugin has
+                             relocated it, which has not happened when tests run
+                             against target/classes. -->
+                        <bstats.relocatecheck>false</bstats.relocatecheck>
+                    </systemPropertyVariables>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-antrun-plugin</artifactId>
+                <version>3.1.0</version>
+                <executions>
+                    <execution>
+                        <!-- A skipped test must break the build.
+
+                             MockBukkit reports API it has not implemented by throwing
+                             UnimplementedOperationException, which extends JUnit's
+                             TestAbortedException, so surefire files it as "Tests run: 1,
+                             Skipped: 1" and exits 0. A green build over a suite that
+                             tested nothing is worse than no suite, so every <skipped>
+                             element in the reports fails the build here. @Disabled and
+                             failed assumptions are caught by the same net, deliberately:
+                             if a test is not to run, delete it. -->
+                        <id>fail-on-skipped-tests</id>
+                        <phase>test</phase>
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+                        <configuration>
+                            <skip>${maven.test.skip}</skip>
+                            <target>
+                                <fail message="Skipped tests are failures here. See the surefire reports in ${project.build.directory}/surefire-reports for which, and why.">
+                                    <condition>
+                                        <resourcecount when="greater" count="0">
+                                            <fileset dir="${project.build.directory}/surefire-reports"
+                                                     includes="TEST-*.xml" erroronmissingdir="false">
+                                                <containsregexp expression="&lt;skipped"/>
+                                            </fileset>
+                                        </resourcecount>
+                                    </condition>
+                                </fail>
+                            </target>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
@@ -365,6 +462,24 @@
             <artifactId>SimplixStorage</artifactId>
             <version>3.2.7</version>
             <scope>compile</scope>
+        </dependency>
+
+        <!-- MockBukkit's v1.21 line is built against the same Minecraft version as the
+             spigot-api above, which is the one that has to match: both jars ship
+             org.bukkit.*, and spigot-api is declared first so it is what the plugin
+             actually compiles and runs against. -->
+        <dependency>
+            <groupId>com.github.seeseemelk</groupId>
+            <artifactId>MockBukkit-v1.21</artifactId>
+            <version>3.133.2</version>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>5.11.2</version>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 
