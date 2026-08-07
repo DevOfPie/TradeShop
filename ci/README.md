@@ -84,11 +84,20 @@ git add .github/workflows/maven.yml
 git commit
 ```
 
-**Run the checker before pushing.** It is the entire safety net on this step —
-it reports `applied` only when a file exists at the live path *and* matches, so
-a copy that went elsewhere still reads `pending`. On the first apply, WC1 landed
-in `.github/ISSUE_TEMPLATE/workflows/`, the checker was not run, and the branch
-pushed green carrying no installed workflow and nothing to say so.
+**Apply on the base branch**, not on the branch that raised the proposal. WC2
+was applied to its own proposal branch, so the gate it fixed kept running with
+the old triggers on the branch everyone works from, and moving it across cost a
+second merge.
+
+**Run the checker before pushing.** It is the entire safety net on the file
+itself — it reports `applied` only when a file exists at the live path *and*
+matches, so a copy that went elsewhere still reads `pending`. On the first
+apply, WC1 landed in `.github/ISSUE_TEMPLATE/workflows/`, the checker was not
+run, and the branch pushed green carrying no installed workflow and nothing to
+say so.
+
+Both mistakes so far have been about *where*, not *what* — the content was
+right each time. That is the step to slow down on.
 
 One `cp` and nothing else. The dead `maven.yml.old` was already removed by the
 branch that raised this proposal, because GitHub's guard is on the **workflow
@@ -101,11 +110,11 @@ Use `cp` rather than copying the text through an editor: only trailing newlines
 are normalised in that comparison, and everything else counts, whitespace
 included.
 
-Then close the loop: move the row in TradeShop-Support's
-`docs/records/workflow-changes.md` to *Made* with the commit, and **delete the
-file from this directory**. A proposal that stays here after being applied
-becomes a second copy of the workflow, free to drift from the one that runs —
-which is the failure this directory would otherwise invite.
+Then close the loop: move the row in the support repository's workflow-changes
+tracker to *Applied* with the commit, and **delete the file from this
+directory**. A proposal that stays here after being applied becomes a second
+copy of the workflow, free to drift from the one that runs — which is the
+failure this directory would otherwise invite.
 
 The tracker row lives in the support repository rather than here, because it is
 a record and records never cross into this tree. The proposal file lives here
