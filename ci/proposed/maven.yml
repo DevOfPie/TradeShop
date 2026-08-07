@@ -1,0 +1,51 @@
+# The checks every change has to pass.
+#
+# Every step here calls a script under ci/. What a step *does* therefore lives
+# in that script, which is writable by whoever is building this repository; what
+# a step *is* — the triggers, the permissions block, the JDK, the pinned
+# actions — lives here, and changing it needs the owner. That split is the whole
+# point of the file, and ci/proposed/README.md is where it is argued.
+#
+# What this does not change: nothing runs on push in this repository today.
+# .github/workflows/maven.yml.old has been inert since 2023-07-20, so this adds
+# the first workflow rather than altering one — there is no behaviour to
+# regress. It publishes nothing: Jenkins remains the publisher for
+# repo.killerofpie.com and this file never writes an artifact anywhere.
+# `permissions:` is contents: read. There is no schedule: and no
+# workflow_dispatch:, so it cannot run except in response to a push or pull
+# request against 2.6.2-revert-save.
+
+name: Build
+
+on:
+  push:
+    branches: ["2.6.2-revert-save"]
+  pull_request:
+    branches: ["2.6.2-revert-save"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # JDK 17, not 8. The pom compiles -source/-target 1.8, but spigot-api 1.21.1
+  # ships Java 17 bytecode (class major version 61) and a JDK 8 javac cannot
+  # read it. maven.yml.old pinned 1.8 and would have failed here.
+  JAVA_VERSION: "17"
+
+jobs:
+  build:
+    name: Build and shade
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+      - name: Build
+        run: sh ci/build.sh
