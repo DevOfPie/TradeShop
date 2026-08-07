@@ -4,24 +4,27 @@
 # in that script, which is writable by whoever is building this repository; what
 # a step *is* — the triggers, the permissions block, the JDK, the pinned
 # actions — lives here, and changing it needs the owner. That split is the whole
-# point of the file, and ci/proposed/README.md is where it is argued.
+# point of the file, and ci/README.md is where it is argued.
 #
-# What this does not change: nothing runs on push in this repository today.
-# .github/workflows/maven.yml.old has been inert since 2023-07-20, so this adds
-# the first workflow rather than altering one — there is no behaviour to
-# regress. It publishes nothing: Jenkins remains the publisher for
-# repo.killerofpie.com and this file never writes an artifact anywhere.
-# `permissions:` is contents: read. There is no schedule: and no
-# workflow_dispatch:, so it cannot run except in response to a push or pull
-# request against 2.6.2-revert-save.
+# Triggers are branch-agnostic on purpose. Naming a branch here means CI stops
+# firing the moment work moves to another one, and moving the branch back needs
+# a manual step from the owner — which is the most expensive way possible to
+# discover that a gate went quiet. A gate that only guards the branch somebody
+# remembered to name is not a gate.
+#
+# What this does not change: it still publishes nothing — Jenkins remains the
+# publisher for repo.killerofpie.com and this file writes no artifact anywhere.
+# `permissions:` is still contents: read. There is still no schedule: and no
+# workflow_dispatch:, so it cannot run except in response to a push or a pull
+# request. What it does change is which branches that covers: all of them,
+# instead of 2.6.2-revert-save alone.
 
 name: Build
 
 on:
   push:
-    branches: ["2.6.2-revert-save"]
+    branches: ["**"]
   pull_request:
-    branches: ["2.6.2-revert-save"]
 
 permissions:
   contents: read
