@@ -1,0 +1,415 @@
+/*
+ * Copyright (c) 2016-2026
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  you may not use this file except in compliance with the License.
+ *  You may obtain a copy of the License at
+ *
+ *                http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ */
+
+package org.shanerx.tradeshop.it;
+
+import org.bukkit.Bukkit;
+import org.bukkit.ChatColor;
+import org.bukkit.Material;
+import org.bukkit.entity.Player;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.EventPriority;
+import org.bukkit.event.Listener;
+import org.bukkit.event.block.SignChangeEvent;
+import org.bukkit.event.server.ServerLoadEvent;
+import org.bukkit.inventory.ItemStack;
+import org.bukkit.plugin.Plugin;
+import org.bukkit.plugin.java.JavaPlugin;
+import org.shanerx.tradeshop.shop.Shop;
+import org.shanerx.tradeshop.shop.ShopChest;
+import org.shanerx.tradeshop.shop.ShopStatus;
+import org.shanerx.tradeshop.shop.ShopType;
+import org.shanerx.tradeshop.shoplocation.ShopLocation;
+
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.io.File;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+
+/**
+ * The in-server half of the tier-2 harness.
+ *
+ * <p>It runs once, from inside a real Paper server, after the server has finished
+ * starting. Each scenario is a piece of behaviour a human would otherwise log in
+ * to check; each writes one line to a result file that {@code ci/integration.sh}
+ * reads after the process has exited. The plugin then shuts the server down
+ * itself, so the runner never has to type {@code stop} into a stdin it has
+ * deliberately closed.
+ *
+ * <h2>Why the result is a file and not a log line</h2>
+ * The runner has to distinguish three states that all look alike from outside: a
+ * run that passed, a run that failed, and a run that never happened. A log line
+ * can be produced by a plugin that half-started; a file that declares how many
+ * scenarios were registered and then lists which ones actually ran lets the
+ * runner catch the third state, which is the one a green build hides.
+ */
+public final class IntegrationPlugin extends JavaPlugin implements Listener {
+
+    /**
+     * Deliberate sabotage, so the gate can be shown to fail rather than only
+     * ever observed passing. Set by {@code ci/integration.sh} from
+     * {@code TS_IT_INDUCE}. It lives in the harness permanently because a
+     * failure mode you have to hand-edit into the code is one nobody re-checks.
+     */
+    private static final String INDUCE = System.getProperty("tradeshop.it.induce", "");
+
+    private final List<Scenario> scenarios = new ArrayList<>();
+
+    /**
+     * The finished lines of the last sign edit, as every plugin left them.
+     *
+     * <p>Volatile because it is written on the server thread and read from the
+     * scenario thread.
+     */
+    private volatile String[] lastSignEventLines = new String[0];
+
+    @Override
+    public void onEnable() {
+        register();
+        getServer().getPluginManager().registerEvents(this, this);
+        getLogger().info("integration harness armed with " + scenarios.size() + " scenario(s)"
+                + ", trade header is " + ShopType.TRADE.toHeader()
+                + (INDUCE.isEmpty() ? "" : ", INDUCED FAILURE MODE: " + INDUCE));
+    }
+
+    /**
+     * The scenarios, in the order a person would perform them.
+     */
+    private void register() {
+        scenarios.add(new Scenario("pluginEnabled", () -> {
+            Plugin tradeShop = Bukkit.getPluginManager().getPlugin("TradeShop");
+            Assert.that(tradeShop != null, "TradeShop is not installed on this server");
+            Assert.that(tradeShop.isEnabled(),
+                    "TradeShop is installed but not enabled - onEnable threw, and the server carried on");
+        }));
+
+        // Writing a shop sign on a chest: the first thing a human tester does,
+        // and the gate everything else is behind.
+        scenarios.add(new Scenario("signOnAChestCreatesAShop", () -> {
+            RealShop scene = new RealShop(this, 1);
+            scene.placeChestAndSign();
+            scene.createShop(ShopType.TRADE.toHeader(), "1 DIAMOND", "1 EMERALD");
+
+            Shop shop = scene.get(() -> Shop.loadShop(new ShopLocation(scene.signBlock().getLocation())));
+
+            Assert.that(shop != null, "no shop was stored at the sign's location");
+            Assert.equal(ShopType.TRADE, shop.getShopType(), "the shop should be a trade shop");
+            Assert.equal(scene.owner().getUniqueId(), shop.getOwner().getUUID(),
+                    "the signer should own the shop");
+            Assert.equal(scene.get(() -> scene.signBlock().getRelative(0, -1, 0).getLocation()),
+                    shop.getInventoryLocation(),
+                    "the shop should be linked to the chest under the sign");
+
+            // Unlike tier 1, the shop was written to a real data file on disk by
+            // the real plugin, and read back out of it.
+            Assert.equal(ShopStatus.OUT_OF_STOCK, shop.getStatus(),
+                    "nothing has been put in the chest yet");
+
+            // TradeShop decorated the EVENT's lines, which is all a plugin can
+            // do during a sign edit...
+            Assert.equal(strip(ShopStatus.OUT_OF_STOCK.getLine()), strip(lastSignEventLines[3]),
+                    "line 3 of the finished sign edit is where a player reads the shop's status");
+
+            // ...and the block is still blank, because writing those lines back
+            // is done by the packet handler that fired the event, not by the
+            // event bus. No client, no packet, no write. That is a property of
+            // the server, not a gap in this harness, and it is asserted rather
+            // than worked around: the sign assertions that matter are in the
+            // stocking scenario, where TradeShop calls sign.update() itself.
+            Assert.equal("", scene.signLines()[0],
+                    "the server writes a sign edit back from the packet handler, so a synthetic "
+                            + "event must leave the block untouched");
+        }));
+
+        // Stocking and trading, and the wall they hit.
+        //
+        // THIS SCENARIO ASSERTS A BLOCKER, NOT CORRECT BEHAVIOUR. It is green
+        // because the situation it describes is real, and it must go red the
+        // moment a real client drives the sign edit - at which point it is
+        // deleted and replaced by the stock and trade flows it is standing in
+        // for. Read the failure as "the blocker is gone", not as a regression.
+        //
+        // The chain: TradeShop's Shop.updateSign() starts at getShopSign(),
+        // which returns null unless the sign BLOCK already reads as a shop sign.
+        // The block only reads that way once a sign edit has been written back
+        // onto it, and that write is done by the packet handler that fired
+        // SignChangeEvent, not by the event bus. A harness that fires the event
+        // itself is not a packet handler, so the block stays blank, the sign is
+        // never updated, the status never leaves OUT_OF_STOCK, and a click on
+        // the sign is not recognised as a click on a shop.
+        //
+        // Copying the event's finished lines onto the block is exactly the
+        // workaround tier 1 carries, and reintroducing it here is the one thing
+        // this unit says not to do quietly. So the chain is documented instead.
+        scenarios.add(new Scenario("aSyntheticSignEditLeavesTheBlockBlankSoTheShopNeverOpens", () -> {
+            RealShop scene = new RealShop(this, 2);
+            scene.placeChestAndSign();
+            scene.createShop(ShopType.TRADE.toHeader(), "1 DIAMOND", "1 EMERALD");
+
+            scene.stockShop(new ItemStack(Material.DIAMOND, 10));
+            Assert.equal(10, scene.countInChest(Material.DIAMOND),
+                    "the diamonds should be in the chest before the lid closes");
+            Assert.that(scene.get(() -> ShopChest.isShopChest(scene.chestBlock())),
+                    "the chest under the sign should be linked to the shop");
+            Assert.that(scene.get(() -> ShopChest.isShopChest(scene.chestInventory())),
+                    "the chest's inventory is what the close event carries, and it is how "
+                            + "TradeShop finds the shop again");
+
+            scene.closeChestAsOwner();
+
+            // TradeShop did react to the close: it recounted the stock, on the
+            // real chest, and got the right answer. Everything up to the sign
+            // works.
+            Assert.eventually(15_000, "TradeShop to recount the stock in the chest",
+                    scene.onServer(() -> Shop.loadShop(new ShopLocation(scene.signBlock().getLocation()))
+                            .getAvailableTrades() == 10));
+
+            Shop shop = scene.get(() -> Shop.loadShop(new ShopLocation(scene.signBlock().getLocation())));
+
+            Assert.that(scene.get(() -> shop.getShopSign()) == null,
+                    "getShopSign() is null while the block is blank, which is what stops the "
+                            + "status from ever being recomputed");
+            Assert.equal(ShopStatus.OUT_OF_STOCK, shop.getStatus(),
+                    "ten trades are available and the shop still says out of stock, because "
+                            + "updateStatus() is only reached through the sign");
+            Assert.equal("", scene.signLines()[3],
+                    "and the sign the server stored is still blank");
+
+            // And so the trade cannot happen either: the click lands on a block
+            // that does not read as a shop sign.
+            Player buyer = scene.buyerHolding(new ItemStack(Material.EMERALD, 5));
+            scene.rightClickSign(buyer);
+
+            Assert.equal(0, scene.countOf(buyer, Material.DIAMOND),
+                    "no product moves, because the clicked block is not a shop sign");
+            Assert.equal(5, scene.countOf(buyer, Material.EMERALD), "and no cost is taken");
+            Assert.equal(10, scene.countInChest(Material.DIAMOND), "and the shop keeps its stock");
+            Assert.equal(0, scene.countInChest(Material.EMERALD), "and is paid nothing");
+        }));
+
+        // Creating a shop the other way a player can: from the chat bar.
+        //
+        // This path writes the sign itself rather than leaving it to a packet
+        // handler, so it is the one that lets the rest of the flows run - and
+        // the sign assertions below read the real block with nothing copied back
+        // onto it by the harness.
+        scenarios.add(new Scenario("commandCreatedShopIsCompleteAndTheServerWritesItsSign", () -> {
+            RealShop scene = new RealShop(this, 3);
+            scene.placeChestAndSign();
+            scene.createShopByCommand("1 DIAMOND", "1 EMERALD");
+
+            Shop shop = scene.get(() -> Shop.loadShop(new ShopLocation(scene.signBlock().getLocation())));
+
+            Assert.that(shop != null, "no shop was stored at the sign's location");
+            Assert.equal(ShopType.TRADE, shop.getShopType(), "the shop should be a trade shop");
+            Assert.equal(scene.owner().getUniqueId(), shop.getOwner().getUUID(),
+                    "the player who ran the command should own the shop");
+            Assert.equal(scene.get(() -> scene.chestBlock().getLocation()), shop.getInventoryLocation(),
+                    "the shop should be linked to the chest under the sign");
+
+            // "Complete" is a property of the shop, not of a message: a shop is
+            // incomplete while either side is empty. /tradeshop create alone
+            // leaves it that way, which is why setProduct and setCost follow.
+            Assert.that(!shop.isMissingItems(),
+                    "both sides should be set, so the shop is no longer incomplete");
+            Assert.equal(ShopStatus.OUT_OF_STOCK, shop.getStatus(),
+                    "a complete shop with an empty chest is out of stock, not incomplete");
+
+            // Read off the real block. TradeShop put every one of these there
+            // through sign.update().
+            Assert.equal(ShopType.TRADE.toHeader(), scene.signLines()[0],
+                    "line 0 is the shop's header");
+            Assert.equal("1 Diamond", scene.signLines()[1], "line 1 is what the shop gives");
+            Assert.equal("1 Emerald", scene.signLines()[2], "line 2 is what the shop takes");
+            Assert.equal(strip(ShopStatus.OUT_OF_STOCK.getLine()), scene.signLines()[3],
+                    "line 3 is where a player reads the shop's status");
+        }));
+
+        // Stocking a shop: the owner puts the product in the chest and shuts the
+        // lid, and the sign is supposed to notice.
+        scenarios.add(new Scenario("closingTheChestAfterStockingItOpensTheShop", () -> {
+            RealShop scene = new RealShop(this, 4);
+            scene.placeChestAndSign();
+            scene.createShopByCommand("1 DIAMOND", "1 EMERALD");
+
+            Assert.equal(ShopStatus.OUT_OF_STOCK,
+                    scene.get(() -> Shop.loadShop(new ShopLocation(scene.signBlock().getLocation())).getStatus()),
+                    "precondition: the shop starts empty");
+
+            scene.stockShop(new ItemStack(Material.DIAMOND, 10));
+            scene.closeChestAsOwner();
+
+            Assert.eventually(15_000, "a stocked shop to report itself open",
+                    scene.onServer(() -> Shop.loadShop(new ShopLocation(scene.signBlock().getLocation()))
+                            .getStatus() == ShopStatus.OPEN));
+
+            Shop shop = scene.get(() -> Shop.loadShop(new ShopLocation(scene.signBlock().getLocation())));
+            Assert.equal(10, shop.getAvailableTrades(), "ten diamonds at one per trade is ten trades");
+
+            // Nothing in this harness ever writes a sign. Line 3 says what it
+            // says because TradeShop called sign.update() and a real server
+            // obeyed - the assertion the tier-1 suite cannot make.
+            Assert.equal(strip(ShopStatus.OPEN.getLine()), scene.signLines()[3],
+                    "line 3 should have been rewritten on the block the server stored");
+        }));
+
+        // The trade itself: the thing a human would otherwise log in, place a
+        // chest, write a sign and click to check. Same four movements the tier-1
+        // suite asserts, so a divergence between tiers is visible rather than
+        // arguable.
+        scenarios.add(new Scenario("buyerWithEnoughCostReceivesTheProduct", () -> {
+            RealShop scene = new RealShop(this, 5);
+            scene.placeChestAndSign();
+            scene.createShopByCommand("1 DIAMOND", "1 EMERALD");
+            scene.stockShop(new ItemStack(Material.DIAMOND, 10));
+            scene.closeChestAsOwner();
+
+            Assert.eventually(15_000, "the shop to be open before anyone trades with it",
+                    scene.onServer(() -> Shop.loadShop(new ShopLocation(scene.signBlock().getLocation()))
+                            .getStatus() == ShopStatus.OPEN));
+
+            Player buyer = scene.buyerHolding(new ItemStack(Material.EMERALD, 5));
+            scene.rightClickSign(buyer);
+
+            Assert.eventually(15_000, "the buyer to be holding a diamond",
+                    scene.onServer(() -> scene.rawCountOf(buyer, Material.DIAMOND) == 1));
+
+            Assert.equal(1, scene.countOf(buyer, Material.DIAMOND), "buyer should have received one diamond");
+            Assert.equal(4, scene.countOf(buyer, Material.EMERALD), "buyer should have paid one emerald");
+            Assert.equal(1, scene.countInChest(Material.EMERALD), "the emerald should be in the shop chest");
+            Assert.equal(9, scene.countInChest(Material.DIAMOND), "the shop should have one fewer diamond");
+        }));
+    }
+
+    private static String strip(String coloured) {
+        return ChatColor.stripColor(coloured);
+    }
+
+    /**
+     * Scenarios run a second after the server reports itself loaded, and off the
+     * server thread.
+     *
+     * <p>{@link ServerLoadEvent} fires once the worlds and every plugin are up,
+     * which is the earliest moment a scenario can touch a real block and get a
+     * real answer. Off-thread because a scenario's job is partly to wait -
+     * TradeShop reads stock when a chest closes and does disk work on the main
+     * thread - and waiting on the main thread is waiting for yourself. Every
+     * call that touches the world is marshalled back; see {@link RealShop}.
+     */
+    /**
+     * What every plugin, TradeShop included, left on a sign edit.
+     *
+     * <p>Recorded at {@code MONITOR}, after TradeShop's {@code HIGHEST} handler.
+     * These are the lines a real server would then write onto the block - the
+     * write is done by the packet handler that fired the event, not by the event
+     * bus, so a harness that fires the event itself never sees them land. Logging
+     * them makes the difference between "TradeShop did not decorate the sign" and
+     * "TradeShop decorated the sign and nothing wrote it back" readable from the
+     * console instead of arguable.
+     */
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void afterSignChange(SignChangeEvent event) {
+        lastSignEventLines = event.getLines().clone();
+        getLogger().info("sign event lines after every plugin ran: " + Arrays.toString(event.getLines())
+                + " cancelled=" + event.isCancelled());
+    }
+
+    @EventHandler
+    public void onServerLoad(ServerLoadEvent event) {
+        getServer().getScheduler().runTaskLaterAsynchronously(this, this::runEverything, 20L);
+    }
+
+    private void runEverything() {
+        List<String> lines = new ArrayList<>();
+        lines.add("SCENARIOS " + scenarios.size());
+
+        for (int i = 0; i < scenarios.size(); i++) {
+            Scenario scenario = scenarios.get(i);
+
+            // "missing" is the failure this harness is least likely to notice on
+            // its own: a scenario that silently does not run while the report
+            // still says the suite finished.
+            if ("missing".equals(INDUCE) && i == scenarios.size() - 1) {
+                getLogger().info("INDUCED: skipping scenario " + scenario.name());
+                continue;
+            }
+
+            lines.add("SCENARIO " + scenario.name() + " " + run(scenario));
+        }
+
+        if ("severe".equals(INDUCE)) {
+            // Every assertion passed and the run is still not trustworthy. This
+            // is the shape of the failure that started this tier.
+            getLogger().severe("INDUCED: a severe line with every scenario green");
+        }
+
+        if ("hang".equals(INDUCE)) {
+            getLogger().info("INDUCED: not writing the result file, the runner must time out");
+            return;
+        }
+
+        writeResult(lines);
+        // Back onto the server thread to stop it: the runner boots this server
+        // with stdin closed, so nothing can type "stop" at it.
+        getServer().getScheduler().runTask(this, Bukkit::shutdown);
+    }
+
+    private String run(Scenario scenario) {
+        try {
+            if ("assert".equals(INDUCE)) {
+                Assert.that(false, "INDUCED: " + scenario.name() + " was told to assert something false");
+            }
+            scenario.body().run();
+            getLogger().info("PASS " + scenario.name());
+            return "PASS";
+        } catch (Throwable t) {
+            // Reported rather than thrown: one broken scenario must not stop the
+            // rest from running, and the runner needs the result file to exist
+            // in order to tell a failure from a run that never happened.
+            getLogger().warning("FAIL " + scenario.name() + ": " + describe(t));
+            return "FAIL " + describe(t);
+        }
+    }
+
+    private String describe(Throwable t) {
+        String message = t.getMessage();
+        String detail = (message == null || message.isEmpty()) ? t.toString() : message;
+        return detail.replace('\n', ' ').replace('\r', ' ');
+    }
+
+    private void writeResult(List<String> lines) {
+        File marker = new File(System.getProperty("tradeshop.it.marker",
+                new File(getDataFolder().getParentFile().getParentFile(), "it-result.txt").getPath()));
+
+        try (PrintWriter out = new PrintWriter(Files.newBufferedWriter(marker.toPath(), StandardCharsets.UTF_8))) {
+            for (String line : lines) {
+                out.println(line);
+            }
+        } catch (IOException e) {
+            // Nothing useful left to do: without the file the runner reports a
+            // run that never happened, which is the right verdict anyway.
+            getLogger().severe("could not write the result file at " + marker + ": " + e);
+        }
+    }
+
+    /** A named piece of behaviour and the moves that check it. */
+    private record Scenario(String name, Runnable body) {
+    }
+}

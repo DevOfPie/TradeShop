@@ -1,0 +1,345 @@
+#!/bin/sh
+# Tier 2: the shaded jar meets a real server.
+#
+# Tier 1 (src/test, MockBukkit) proves the plugin's logic against a mock. It
+# cannot prove the artifact starts: a green build, green CI and a green tier-1
+# suite have all been observed over a jar that died in onEnable on Paper. This
+# script puts a real Paper server between the build and the claim.
+#
+# What it does, in order:
+#   1. resolves a PINNED Paper build through fill.papermc.io/v3 and verifies the
+#      published SHA-256 (the v2 API is sunset),
+#   2. resolves a PINNED BKCommonLib build from its CI and verifies its SHA-256,
+#   3. builds the in-server test plugin from it/ (a sibling Maven project, not a
+#      module of the root pom),
+#   4. assembles a throwaway server under target/, boots it --nogui with stdin
+#      closed, and waits for the test plugin to write a result file,
+#   5. fails the run on a timeout, on any severe console line, on a failed
+#      scenario, or on a scenario count that does not match what was expected.
+#
+# Run it the same way CI does:  sh ci/integration.sh
+#
+# Proving the gate can fail: set TS_IT_INDUCE to one of
+#   assert  - a scenario asserts something false
+#   severe  - every scenario passes but the plugin logs a severe line
+#   missing - a scenario is silently not run
+#   hang    - the marker is never written, so the run must time out
+# Each must turn the run red. A gate that has only ever been green has not been
+# shown to work, so the hook is a permanent part of the harness rather than an
+# edit someone makes and reverts.
+
+set -eu
+
+# ---------------------------------------------------------------------------
+# Pins. Exactly one Paper version is wired and it is a variable with one value;
+# the cross-version matrix is a separate piece of work and building it here
+# would take scope from it.
+# ---------------------------------------------------------------------------
+PAPER_PROJECT=paper
+PAPER_VERSION=1.21.11
+PAPER_BUILD=132
+PAPER_SHA256=5ffef465eeeb5f2a3c23a24419d97c51afd7dbb4923ff42df9a3f58bba1ccfba
+
+# TradeShop cannot enable without BKCommonLib: Setting.<clinit> reaches
+# com/bergerkiller/bukkit/common/config/JsonSerializer and dies with
+# NoClassDefFoundError if it is absent. The Maven artifacts are NOT usable as
+# plugins - they carry a plugin.yml but omit the shaded internals and die at
+# load on .../softdependency/SoftServiceDependency. The CI build is the
+# installable one, and it is pinned to a build number rather than
+# lastSuccessfulBuild so that a run is reproducible.
+BKCL_BUILD=2031
+BKCL_JAR=BKCommonLib-2.0.2-SNAPSHOT-${BKCL_BUILD}.jar
+BKCL_URL=https://ci.mg-dev.eu/job/BKCommonLib/${BKCL_BUILD}/artifact/build/${BKCL_JAR}
+BKCL_SHA256=e7b15d76898834a0b7e8a080982a3f24c69b4a82e87a1e5ec29bce8d17045c46
+
+# A scenario that did not run is a failure, so the count is asserted here rather
+# than read out of the report the run itself produced.
+EXPECTED_SCENARIOS=6
+
+# Boot to "Done" is ~10s bare and ~24s with BKCommonLib on the reference
+# machine. The timeout is generous because a timeout is a failure and never a
+# skip: a cold CI runner that is merely slow must not be reported as a bug.
+# TS_IT_TIMEOUT is for shortening it when deliberately testing the timeout path;
+# nothing in CI sets it.
+RUN_TIMEOUT=${TS_IT_TIMEOUT:-300}
+
+# online-mode=false is required for a headless harness to drive the server at
+# all, which makes it a security property rather than a convenience. The server
+# is therefore bound to loopback on a high port and lives for seconds. A copy of
+# this script run against a public interface is an unauthenticated server.
+BIND_ADDRESS=127.0.0.1
+BIND_PORT=25599
+
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+CACHE=$ROOT/target/it-cache
+SERVER=$ROOT/target/it-server
+CONSOLE=$SERVER/console.log
+MARKER=$SERVER/it-result.txt
+PAPER_JAR=$SERVER/paper.jar
+
+say() { printf '[integration] %s\n' "$*"; }
+die() { printf '[integration] FAIL: %s\n' "$*" >&2; exit 1; }
+
+need() {
+    command -v "$1" >/dev/null 2>&1 || die "$1 is required and is not on PATH"
+}
+
+# sha256 of $1, or empty if the file is not there.
+sum_of() {
+    [ -f "$1" ] || return 0
+    sha256sum "$1" | cut -d' ' -f1
+}
+
+# ---------------------------------------------------------------------------
+# 1. Paper, pinned and checksummed.
+# ---------------------------------------------------------------------------
+fetch_paper() {
+    cached=$CACHE/${PAPER_PROJECT}-${PAPER_VERSION}-${PAPER_BUILD}.jar
+
+    if [ "$(sum_of "$cached")" = "$PAPER_SHA256" ]; then
+        say "Paper ${PAPER_VERSION} build ${PAPER_BUILD} already cached, checksum matches"
+        return 0
+    fi
+
+    api=https://fill.papermc.io/v3/projects/${PAPER_PROJECT}/versions/${PAPER_VERSION}/builds/${PAPER_BUILD}
+    say "resolving ${api}"
+
+    meta=$CACHE/paper-build.json
+    curl -fsSL -H 'User-Agent: TradeShop-integration/1 (+https://github.com/DevOfPie/TradeShop)' \
+        -o "$meta" "$api" \
+        || die "could not reach the Paper API for ${PAPER_PROJECT} ${PAPER_VERSION} build ${PAPER_BUILD}.
+       If this build was purged, the pin at the top of this script is stale -
+       that is a purge, not your mistake. Pick a current build, update
+       PAPER_BUILD and PAPER_SHA256 together, and say so in the commit."
+
+    url=$(jq -r '.downloads["server:default"].url' "$meta")
+    published=$(jq -r '.downloads["server:default"].checksums.sha256' "$meta")
+
+    [ -n "$url" ] && [ "$url" != null ] || die "the Paper API returned no download URL for build ${PAPER_BUILD}"
+    [ "$published" = "$PAPER_SHA256" ] || die "Paper build ${PAPER_BUILD} publishes sha256 ${published}, this script pins ${PAPER_SHA256}.
+       The pin and the registry disagree; do not paper over it by trusting the registry."
+
+    say "downloading ${url}"
+    curl -fsSL -o "$cached.part" "$url" || die "download of Paper build ${PAPER_BUILD} failed"
+    mv "$cached.part" "$cached"
+
+    got=$(sum_of "$cached")
+    [ "$got" = "$PAPER_SHA256" ] || die "downloaded Paper jar hashes ${got}, expected ${PAPER_SHA256}"
+    say "Paper ${PAPER_VERSION} build ${PAPER_BUILD} verified"
+}
+
+# ---------------------------------------------------------------------------
+# 2. BKCommonLib, pinned and checksummed.
+# ---------------------------------------------------------------------------
+fetch_bkcommonlib() {
+    cached=$CACHE/$BKCL_JAR
+
+    if [ "$(sum_of "$cached")" = "$BKCL_SHA256" ]; then
+        say "BKCommonLib build ${BKCL_BUILD} already cached, checksum matches"
+        return 0
+    fi
+
+    say "downloading ${BKCL_URL}"
+    curl -fsSL -o "$cached.part" "$BKCL_URL" \
+        || die "could not fetch BKCommonLib build ${BKCL_BUILD}.
+       CI keeps a limited number of builds; if this one has been rotated out,
+       the pin is stale rather than wrong. Update BKCL_BUILD and BKCL_SHA256
+       together."
+    mv "$cached.part" "$cached"
+
+    got=$(sum_of "$cached")
+    [ "$got" = "$BKCL_SHA256" ] || die "downloaded BKCommonLib jar hashes ${got}, expected ${BKCL_SHA256}"
+    say "BKCommonLib build ${BKCL_BUILD} verified"
+}
+
+# ---------------------------------------------------------------------------
+# 3. The plugin under test, and the plugin that tests it.
+# ---------------------------------------------------------------------------
+find_tradeshop_jar() {
+    # The shade plugin writes straight into target/server/plugins/.
+    TRADESHOP_JAR=$(ls "$ROOT"/target/server/plugins/*.jar 2>/dev/null | head -n 1 || true)
+    [ -n "$TRADESHOP_JAR" ] || die "no shaded TradeShop jar in target/server/plugins/. Run 'mvn -B package' first, or 'sh ci/build.sh'."
+}
+
+build_test_plugin() {
+    tradeshop_jar=$1
+
+    # it/ compiles against the plugin it is testing, but the plugin is not
+    # published anywhere a build can resolve it from, and adding an install
+    # step to the root pom would be a line in upstream's file. Installing the
+    # freshly shaded jar under a fixed local coordinate keeps the version out
+    # of it/pom.xml entirely: whatever was just built is what it/ compiles
+    # against.
+    say "installing $(basename "$tradeshop_jar") as org.shanerx:tradeshop:it-local"
+    mvn -B -q org.apache.maven.plugins:maven-install-plugin:3.1.1:install-file \
+        -Dfile="$tradeshop_jar" \
+        -DgroupId=org.shanerx -DartifactId=tradeshop -Dversion=it-local -Dpackaging=jar \
+        || die "could not install the shaded jar into the local repository"
+
+    say "building the in-server test plugin (mvn -f it/pom.xml package)"
+    mvn -B -q -f "$ROOT/it/pom.xml" clean package \
+        || die "the in-server test plugin did not build"
+
+    IT_JAR=$(ls "$ROOT"/it/target/tradeshop-integration-*.jar 2>/dev/null | head -n 1 || true)
+    [ -n "$IT_JAR" ] || die "it/ built but produced no jar"
+}
+
+# ---------------------------------------------------------------------------
+# 4. A throwaway server.
+# ---------------------------------------------------------------------------
+assemble_server() {
+    tradeshop_jar=$1
+    it_jar=$2
+
+    # Everything the server can regenerate is wiped so that no run inherits a
+    # shop, a chest linkage or a data file from the last one. versions/,
+    # libraries/ and cache/ are Paper's own unpacking of the jar and are kept:
+    # they are reproducible from the checksummed jar and re-downloading them
+    # every run is minutes of nothing.
+    rm -rf "$SERVER/plugins" "$SERVER/world" "$SERVER/world_nether" "$SERVER/world_the_end" \
+           "$SERVER/logs" "$CONSOLE" "$MARKER"
+    mkdir -p "$SERVER/plugins"
+
+    cp "$CACHE/${PAPER_PROJECT}-${PAPER_VERSION}-${PAPER_BUILD}.jar" "$PAPER_JAR"
+    cp "$CACHE/$BKCL_JAR" "$SERVER/plugins/"
+    cp "$tradeshop_jar" "$SERVER/plugins/"
+    cp "$it_jar" "$SERVER/plugins/"
+
+    # The Mojang EULA is accepted for these automated runs by the owner of this
+    # repository, in the record, once. The file is still written on every boot -
+    # what changed is that writing it is no longer an assumption.
+    printf 'eula=true\n' > "$SERVER/eula.txt"
+
+    cat > "$SERVER/server.properties" <<PROPS
+server-ip=$BIND_ADDRESS
+server-port=$BIND_PORT
+online-mode=false
+enable-status=false
+enable-query=false
+enable-rcon=false
+white-list=false
+level-type=minecraft:flat
+# A superflat with its layers spelled out. The default empty generator-settings
+# makes vanilla log "No key layers in MapLike[{}]" at ERROR on every world it
+# generates, and this harness treats an ERROR line as a failed run - correctly,
+# so the world has to be described rather than left to a default that complains.
+generator-settings={"layers":[{"block":"minecraft:bedrock","height":1},{"block":"minecraft:dirt","height":2},{"block":"minecraft:grass_block","height":1}],"biome":"minecraft:plains"}
+generate-structures=false
+spawn-monsters=false
+spawn-animals=false
+spawn-npcs=false
+view-distance=3
+simulation-distance=3
+max-players=4
+spawn-protection=0
+motd=TradeShop integration harness
+PROPS
+}
+
+boot_and_wait() {
+    say "booting Paper ${PAPER_VERSION} build ${PAPER_BUILD} on ${BIND_ADDRESS}:${BIND_PORT}"
+    started=$(date +%s)
+
+    # stdin from /dev/null: a --nogui server whose stdin is a closed terminal
+    # spins reading EOF. The test plugin shuts the server down itself once it
+    # has written its result, so nothing needs to type "stop".
+    (
+        cd "$SERVER" &&
+        exec java -Xms512M -Xmx1G -XX:+UseG1GC \
+            ${TS_IT_INDUCE:+-Dtradeshop.it.induce=$TS_IT_INDUCE} \
+            -Dtradeshop.it.marker="$MARKER" \
+            -jar paper.jar --nogui
+    ) < /dev/null > "$CONSOLE" 2>&1 &
+    server_pid=$!
+
+    waited=0
+    while [ "$waited" -lt "$RUN_TIMEOUT" ]; do
+        if ! kill -0 "$server_pid" 2>/dev/null; then
+            wait "$server_pid" 2>/dev/null || true
+            elapsed=$(( $(date +%s) - started ))
+            say "server exited after ${elapsed}s"
+            return 0
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+
+    say "no result after ${RUN_TIMEOUT}s, killing the server"
+    kill "$server_pid" 2>/dev/null || true
+    sleep 5
+    kill -9 "$server_pid" 2>/dev/null || true
+    # Backstop for a JVM that outlived its shell. The bracket keeps the pattern
+    # from matching the shell that is running it, and the path keeps it from
+    # matching anybody else's server.
+    pkill -f "[i]t-server/paper.jar" 2>/dev/null || true
+
+    die "the server did not finish within ${RUN_TIMEOUT}s. A timeout is a failure, never a skip - see $CONSOLE"
+}
+
+# ---------------------------------------------------------------------------
+# 5. Judgement. Every one of these is a way a run can look green and be wrong.
+# ---------------------------------------------------------------------------
+check_console() {
+    [ -f "$CONSOLE" ] || die "the server produced no console output at all"
+
+    grep -q 'Done (' "$CONSOLE" \
+        || die "the server never finished starting - it printed no 'Done (' line. Console:
+$(tail -n 40 "$CONSOLE")"
+
+    # A severe line fails the run even when every assertion passed. onEnable
+    # throwing while the server carries on is exactly the shape of failure a
+    # harness that only checks its own assertions calls green.
+    severe=$(grep -nE '\[[0-9:]+ (ERROR|SEVERE|FATAL)\]|Exception|Error occurred while enabling|Could not load .plugin' "$CONSOLE" || true)
+    [ -z "$severe" ] || die "the console carries severe lines:
+$severe"
+}
+
+check_results() {
+    [ -f "$MARKER" ] || die "the test plugin wrote no result file. The server booted and stopped without running anything, which is the failure this check exists for. Console:
+$(tail -n 40 "$CONSOLE")"
+
+    ran=$(grep -c '^SCENARIO ' "$MARKER" || true)
+    declared=$(awk '/^SCENARIOS /{print $2}' "$MARKER")
+
+    [ -n "$declared" ] || die "the result file has no SCENARIOS line, so the run cannot be shown to have finished:
+$(cat "$MARKER")"
+    [ "$ran" = "$declared" ] || die "the result file declares ${declared} scenarios but records ${ran}"
+    [ "$ran" = "$EXPECTED_SCENARIOS" ] || die "expected ${EXPECTED_SCENARIOS} scenarios, ${ran} ran. A scenario that did not run is a failure, not a smaller suite:
+$(cat "$MARKER")"
+
+    failures=$(grep '^SCENARIO .* FAIL' "$MARKER" || true)
+    [ -z "$failures" ] || die "scenarios failed:
+$failures"
+
+    say "$ran/$EXPECTED_SCENARIOS scenarios passed:"
+    sed 's/^/[integration]   /' "$MARKER"
+}
+
+# ---------------------------------------------------------------------------
+main() {
+    need curl
+    need jq
+    need sha256sum
+    need java
+    need mvn
+
+    mkdir -p "$CACHE" "$SERVER"
+
+    fetch_paper
+    fetch_bkcommonlib
+
+    find_tradeshop_jar
+    say "plugin under test: $(basename "$TRADESHOP_JAR")"
+    build_test_plugin "$TRADESHOP_JAR"
+
+    assemble_server "$TRADESHOP_JAR" "$IT_JAR"
+
+    run_started=$(date +%s)
+    boot_and_wait
+    check_console
+    check_results
+
+    say "integration run green in $(( $(date +%s) - run_started ))s on Paper ${PAPER_VERSION} build ${PAPER_BUILD}"
+}
+
+main "$@"

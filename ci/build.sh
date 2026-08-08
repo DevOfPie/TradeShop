@@ -14,3 +14,9 @@ set -eu
 # -B is batch mode: no ANSI, no interactive prompts, and a log a human can read
 # after the fact rather than a progress spinner.
 mvn -B clean package
+
+# Tier 2: boot the jar that was just shaded on a real Paper server and assert
+# from inside it. The build above cannot tell whether the artifact starts - a
+# green build, green CI and a green tier-1 suite have all been observed over a
+# jar that died in onEnable. See ci/integration.sh.
+sh ci/integration.sh

@@ -1,0 +1,11 @@
+name: TradeShopIT
+version: ${project.version}
+main: org.shanerx.tradeshop.it.IntegrationPlugin
+api-version: '1.21'
+load: POSTWORLD
+description: ${project.description}
+
+# Hard dependency, not soft: if TradeShop is not on this server there is nothing
+# to assert, and a harness that quietly runs zero scenarios is the failure mode
+# this whole tier exists to close.
+depend: [TradeShop]
