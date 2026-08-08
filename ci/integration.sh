@@ -1,29 +1,42 @@
 #!/bin/sh
-# Tier 2: the shaded jar meets a real server.
+# Tiers 2 and 3: the shaded jar meets a real server, and a real client plays.
 #
 # Tier 1 (src/test, MockBukkit) proves the plugin's logic against a mock. It
 # cannot prove the artifact starts: a green build, green CI and a green tier-1
 # suite have all been observed over a jar that died in onEnable on Paper. This
-# script puts a real Paper server between the build and the claim.
+# script puts a real Paper server between the build and the claim, and then puts
+# a real client in front of the server.
 #
 # What it does, in order:
 #   1. resolves a PINNED Paper build through fill.papermc.io/v3 and verifies the
 #      published SHA-256 (the v2 API is sunset),
 #   2. resolves a PINNED BKCommonLib build from its CI and verifies its SHA-256,
 #   3. builds the in-server test plugin from it/ (a sibling Maven project, not a
-#      module of the root pom),
+#      module of the root pom) and installs it-client/'s pinned npm tree,
 #   4. assembles a throwaway server under target/, boots it --nogui with stdin
-#      closed, and waits for the test plugin to write a result file,
-#   5. fails the run on a timeout, on any severe console line, on a failed
-#      scenario, or on a scenario count that does not match what was expected.
+#      closed, waits for the harness to say it is armed, and launches the bot,
+#   5. waits for the test plugin to write a result file,
+#   6. fails the run on a timeout, on any severe console line, on a client that
+#      never logged in, on a failed scenario, on a scenario count that does not
+#      match what was expected, or on a bot that exited non-zero.
 #
 # Run it the same way CI does:  sh ci/integration.sh
 #
+# THE SEQUENCING, because it is the one piece of engineering here that is not
+# obvious. Tier 2's plugin shuts the server down when its scenarios end; a bot
+# needs the server alive and needs to have connected first. So in client mode the
+# plugin does not shut down after tier 2 - it arms the tier-3 step machine and
+# prints a marker. This script waits for THAT LINE, not for an interval, before
+# it starts the bot; the bot's last act is `/itstep finish`, which is what makes
+# the plugin write its result and stop the server. Nothing sleeps and nothing
+# guesses.
+#
 # Proving the gate can fail: set TS_IT_INDUCE to one of
-#   assert  - a scenario asserts something false
-#   severe  - every scenario passes but the plugin logs a severe line
-#   missing - a scenario is silently not run
-#   hang    - the marker is never written, so the run must time out
+#   assert   - a scenario asserts something false
+#   severe   - every scenario passes but the plugin logs a severe line
+#   missing  - a scenario is silently not run
+#   hang     - the marker is never written, so the run must time out
+#   noclient - the bot is never launched, so the tier-3 steps never run
 # Each must turn the run red. A gate that has only ever been green has not been
 # shown to work, so the hook is a permanent part of the harness rather than an
 # edit someone makes and reverts.
@@ -53,8 +66,21 @@ BKCL_URL=https://ci.mg-dev.eu/job/BKCommonLib/${BKCL_BUILD}/artifact/build/${BKC
 BKCL_SHA256=e7b15d76898834a0b7e8a080982a3f24c69b4a82e87a1e5ec29bce8d17045c46
 
 # A scenario that did not run is a failure, so the count is asserted here rather
-# than read out of the report the run itself produced.
-EXPECTED_SCENARIOS=6
+# than read out of the report the run itself produced. Six in-server scenarios
+# plus six driven by a real client; both halves declare themselves before they
+# run, and the plugin records every step the client never reached as a failure by
+# name rather than leaving the suite looking smaller.
+EXPECTED_SCENARIOS=12
+
+# Tier 3. The client is not optional: a run that boots a server, plays nothing
+# and exits 0 is the vacuous pass this project treats as the worst possible
+# output, so an absent Node toolchain is a failed run and never a skipped tier.
+#
+# How long the server waits for the client before recording every unreached step
+# as a failure. Generous, because login, chunk load and window open are all
+# timing on a cold runner. TS_IT_CLIENT_DEADLINE shortens it when deliberately
+# proving the noclient path; nothing in CI sets it.
+CLIENT_DEADLINE=${TS_IT_CLIENT_DEADLINE:-180000}
 
 # Boot to "Done" is ~10s bare and ~24s with BKCommonLib on the reference
 # machine. The timeout is generous because a timeout is a failure and never a
@@ -76,6 +102,8 @@ SERVER=$ROOT/target/it-server
 CONSOLE=$SERVER/console.log
 MARKER=$SERVER/it-result.txt
 PAPER_JAR=$SERVER/paper.jar
+CLIENT_DIR=$ROOT/it-client
+CLIENT_LOG=$SERVER/client.log
 
 say() { printf '[integration] %s\n' "$*"; }
 die() { printf '[integration] FAIL: %s\n' "$*" >&2; exit 1; }
@@ -184,6 +212,21 @@ build_test_plugin() {
     [ -n "$IT_JAR" ] || die "it/ built but produced no jar"
 }
 
+# Every JavaScript dependency comes from the lockfile, never from a range: this
+# tier is the flakiest one in the project and "it worked last week" must not be a
+# possible explanation. `npm ci` refuses to run at all if package.json and
+# package-lock.json disagree, which is the property being bought here.
+install_client() {
+    [ -f "$CLIENT_DIR/package-lock.json" ] \
+        || die "it-client/package-lock.json is missing, so the client's dependencies are not pinned"
+
+    say "installing the client's pinned dependencies (npm ci)"
+    ( cd "$CLIENT_DIR" && npm ci --no-audit --no-fund >/dev/null ) \
+        || die "npm ci failed in it-client/. If package.json and package-lock.json disagree, that is
+       what npm ci is refusing to guess about - update the lockfile in the same
+       commit as the dependency."
+}
+
 # ---------------------------------------------------------------------------
 # 4. A throwaway server.
 # ---------------------------------------------------------------------------
@@ -197,7 +240,7 @@ assemble_server() {
     # they are reproducible from the checksummed jar and re-downloading them
     # every run is minutes of nothing.
     rm -rf "$SERVER/plugins" "$SERVER/world" "$SERVER/world_nether" "$SERVER/world_the_end" \
-           "$SERVER/logs" "$CONSOLE" "$MARKER"
+           "$SERVER/logs" "$CONSOLE" "$MARKER" "$CLIENT_LOG" "$SERVER/ops.json" "$SERVER/usercache.json"
     mkdir -p "$SERVER/plugins"
 
     cp "$CACHE/${PAPER_PROJECT}-${PAPER_VERSION}-${PAPER_BUILD}.jar" "$PAPER_JAR"
@@ -248,10 +291,13 @@ boot_and_wait() {
         exec java -Xms512M -Xmx1G -XX:+UseG1GC \
             ${TS_IT_INDUCE:+-Dtradeshop.it.induce=$TS_IT_INDUCE} \
             -Dtradeshop.it.marker="$MARKER" \
+            -Dtradeshop.it.client=true \
+            -Dtradeshop.it.clientdeadline="$CLIENT_DEADLINE" \
             -jar paper.jar --nogui
     ) < /dev/null > "$CONSOLE" 2>&1 &
     server_pid=$!
 
+    client_started=no
     waited=0
     while [ "$waited" -lt "$RUN_TIMEOUT" ]; do
         if ! kill -0 "$server_pid" 2>/dev/null; then
@@ -260,6 +306,17 @@ boot_and_wait() {
             say "server exited after ${elapsed}s"
             return 0
         fi
+
+        # The bot starts when the harness says it is armed, and not a moment
+        # before: the tier-3 step machine is wired at enable but only accepts
+        # steps once tier 2 has finished, so a bot that connected early would be
+        # told so and fail. Waiting on the marker is waiting on a state the
+        # server published, which is the difference between this and a sleep.
+        if [ "$client_started" = no ] && grep -q 'tier 3 armed, waiting for a client' "$CONSOLE" 2>/dev/null; then
+            client_started=yes
+            launch_client
+        fi
+
         sleep 1
         waited=$((waited + 1))
     done
@@ -274,6 +331,29 @@ boot_and_wait() {
     pkill -f "[i]t-server/paper.jar" 2>/dev/null || true
 
     die "the server did not finish within ${RUN_TIMEOUT}s. A timeout is a failure, never a skip - see $CONSOLE"
+}
+
+# The bot runs alongside the server rather than blocking this loop, so that a bot
+# which wedges is still caught by RUN_TIMEOUT above rather than by nothing.
+launch_client() {
+    if [ "${TS_IT_INDUCE:-}" = noclient ]; then
+        say "INDUCED noclient: not launching the bot. Every tier-3 step must now fail by name."
+        return 0
+    fi
+    if [ "${TS_IT_INDUCE:-}" = hang ]; then
+        # In this mode the plugin deliberately never arms the client phase, so
+        # this branch is unreachable; it is here so that reading the script does
+        # not leave the question open.
+        return 0
+    fi
+
+    say "the harness is armed; launching the client"
+    (
+        cd "$CLIENT_DIR" &&
+        TS_IT_HOST=$BIND_ADDRESS TS_IT_PORT=$BIND_PORT TS_IT_VERSION=$PAPER_VERSION \
+        exec node play.js
+    ) < /dev/null > "$CLIENT_LOG" 2>&1 &
+    client_pid=$!
 }
 
 # ---------------------------------------------------------------------------
@@ -292,6 +372,40 @@ $(tail -n 40 "$CONSOLE")"
     severe=$(grep -nE '\[[0-9:]+ (ERROR|SEVERE|FATAL)\]|Exception|Error occurred while enabling|Could not load .plugin' "$CONSOLE" || true)
     [ -z "$severe" ] || die "the console carries severe lines:
 $severe"
+
+    # A client that never logged in is the vacuous pass this tier exists to
+    # close, and it is asserted against the SERVER's console rather than against
+    # anything the bot said about itself. The server is the only party that knows
+    # whether a session was accepted.
+    grep -q 'logged in with entity id' "$CONSOLE" \
+        || die "no client ever logged in to this server, so nothing at tier 3 was exercised.
+       A server that boots, plays nothing and stops cleanly is the failure this
+       check exists for. Client log:
+$(tail -n 30 "$CLIENT_LOG" 2>/dev/null || echo '(the client wrote no log at all)')"
+}
+
+# The bot's own verdict, read last and on purpose: it says whether the actions
+# could be performed, while the result file says whether they had the right
+# effect. Reporting the effect first means a red run names the behaviour rather
+# than the plumbing.
+check_client() {
+    if [ "${TS_IT_INDUCE:-}" = noclient ]; then
+        return 0
+    fi
+    [ -n "${client_pid:-}" ] || die "the harness armed tier 3 and no bot was ever launched"
+
+    # Guarded, not bare: under `set -e` a non-zero `wait` exits this script on the
+    # spot, which would fail the run with no message at all - the one outcome
+    # worse than a wrong message.
+    client_status=0
+    wait "$client_pid" 2>/dev/null || client_status=$?
+    [ "$client_status" = 0 ] || die "the client exited ${client_status}. It reports only what it did;
+       the scenarios above report what happened. Client log:
+$(tail -n 40 "$CLIENT_LOG")"
+
+    say "client finished clean:"
+    grep -E 'negotiated version|site:|placed |typing the sign|clicking |-->' "$CLIENT_LOG" \
+        | sed 's/^/[integration]   /' || true
 }
 
 check_results() {
@@ -322,6 +436,10 @@ main() {
     need sha256sum
     need java
     need mvn
+    # Tier 3 is not optional, so neither is its toolchain. A missing Node is a
+    # failed run: skipping the tier would turn a gate into a green light.
+    need node
+    need npm
 
     mkdir -p "$CACHE" "$SERVER"
 
@@ -331,6 +449,7 @@ main() {
     find_tradeshop_jar
     say "plugin under test: $(basename "$TRADESHOP_JAR")"
     build_test_plugin "$TRADESHOP_JAR"
+    install_client
 
     assemble_server "$TRADESHOP_JAR" "$IT_JAR"
 
@@ -338,8 +457,9 @@ main() {
     boot_and_wait
     check_console
     check_results
+    check_client
 
-    say "integration run green in $(( $(date +%s) - run_started ))s on Paper ${PAPER_VERSION} build ${PAPER_BUILD}"
+    say "integration run green in $(( $(date +%s) - run_started ))s on Paper ${PAPER_VERSION} build ${PAPER_BUILD}, client $(node --version)"
 }
 
 main "$@"

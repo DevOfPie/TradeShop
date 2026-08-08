@@ -40,3 +40,7 @@ dependency-reduced-pom.xml
 # of this repository, so without this one `git add -A` commits a second copy of
 # the repo into itself.
 /.claude/
+
+# The tier-3 client is an npm project, so its dependency tree is build output
+# too - pinned by package-lock.json and installed by ci/integration.sh.
+/it-client/node_modules/

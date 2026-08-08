@@ -35,9 +35,6 @@ import org.bukkit.command.PluginCommand;
 import org.bukkit.plugin.Plugin;
 
 import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.function.Supplier;
 
 /**
@@ -66,7 +63,6 @@ import java.util.function.Supplier;
 final class RealShop {
 
     private static final int CHEST_Y = 0;
-    private static final long SYNC_TIMEOUT_SECONDS = 30;
 
     private final Plugin plugin;
     private final int index;
@@ -307,25 +303,7 @@ final class RealShop {
      * behaviour - any world access from anywhere else.
      */
     <T> T get(Callable<T> body) {
-        if (Bukkit.isPrimaryThread()) {
-            throw new IllegalStateException("scenarios must not run on the server thread: "
-                    + "they wait for the server, and waiting on the server thread is a deadlock");
-        }
-        try {
-            return Bukkit.getScheduler().callSyncMethod(plugin, body).get(SYNC_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-        } catch (TimeoutException e) {
-            throw new AssertionError("the server did not run a scheduled task within "
-                    + SYNC_TIMEOUT_SECONDS + "s - it is stuck, and a timeout is a failure");
-        } catch (ExecutionException e) {
-            Throwable cause = e.getCause() == null ? e : e.getCause();
-            if (cause instanceof AssertionError error) {
-                throw error;
-            }
-            throw new AssertionError(cause.toString(), cause);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new AssertionError("interrupted while waiting for the server");
-        }
+        return Sync.get(plugin, body);
     }
 
     /** A condition evaluated on the main thread, for {@link Assert#eventually}. */
