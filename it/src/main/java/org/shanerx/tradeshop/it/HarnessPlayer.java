@@ -19,6 +19,7 @@ package org.shanerx.tradeshop.it;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.Location;
+import org.bukkit.block.Block;
 import org.bukkit.entity.EntityType;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.Inventory;
@@ -70,6 +71,20 @@ final class HarnessPlayer {
      * shop owner as - resolves to the same identity the harness used.
      */
     static Player create(String name, Location where) {
+        return create(name, where, null);
+    }
+
+    /**
+     * As {@link #create(String, Location)}, but looking at a particular block.
+     *
+     * <p>Every TradeShop command works on "the sign in front of you":
+     * {@code ShopUser.findObservedSign} asks the player for
+     * {@code getTargetBlockExact}. Ray-tracing from a player who is not really
+     * standing anywhere would be theatre, so the harness answers that one
+     * question with the block the scenario means and lets the command do the
+     * rest for real.
+     */
+    static Player create(String name, Location where, Block lookingAt) {
         UUID uuid = UUID.nameUUIDFromBytes(("OfflinePlayer:" + name).getBytes(StandardCharsets.UTF_8));
         Inventory backing = Bukkit.createInventory(null, 36, name + "'s inventory");
 
@@ -95,6 +110,7 @@ final class HarnessPlayer {
                     case "isSneaking", "isDead", "isSleeping" -> false;
                     case "getGameMode" -> org.bukkit.GameMode.SURVIVAL;
                     case "getItemInHand" -> inventory.getItemInMainHand();
+                    case "getTargetBlockExact", "getTargetBlock" -> lookingAt;
                     // Chat has nowhere to go without a connection, but it is how
                     // TradeShop explains a refusal - "no chest", "shop limit
                     // reached" - so it goes to the console instead of nowhere.

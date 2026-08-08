@@ -31,6 +31,7 @@ import org.bukkit.event.block.SignChangeEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.command.PluginCommand;
 import org.bukkit.plugin.Plugin;
 
 import java.util.concurrent.Callable;
@@ -97,13 +98,60 @@ final class RealShop {
             chestBlock.setType(Material.CHEST, false);
             signBlock.setType(Material.OAK_SIGN, false);
 
-            owner = HarnessPlayer.create("owner" + index, chestBlock.getLocation().add(0.5, 1, 1.5));
+            owner = HarnessPlayer.create("owner" + index, chestBlock.getLocation().add(0.5, 1, 1.5), signBlock);
         });
     }
 
     // ------------------------------------------------------------------
     // The three flows
     // ------------------------------------------------------------------
+
+    /**
+     * Creates a shop the way a player creates one from the chat bar.
+     *
+     * <p>Three commands, because that is what it takes: {@code /tradeshop create}
+     * makes a shop with no items in it - {@code INCOMPLETE} - and
+     * {@code setProduct} and {@code setCost} fill the two sides. Each runs
+     * TradeShop's whole
+     * {@code CommandCaller -> CommandType -> SubCommand -> runner} chain; see
+     * {@link #dispatch} for the one piece of server plumbing that is stepped
+     * around, and why.
+     *
+     * <p>This path, unlike a sign edit, writes the sign itself:
+     * {@code Utils.createShop} with no {@code SignChangeEvent} to decorate calls
+     * {@code Shop.updateSign(Sign)}, which calls {@code sign.update()} on the
+     * real block. Every later sign update follows the same route. So the sign
+     * assertions in these scenarios read what TradeShop actually wrote to the
+     * world, with nothing copied back by the harness.
+     */
+    void createShopByCommand(String product, String cost) {
+        dispatch("create");
+        dispatch(("setProduct " + product).split(" "));
+        dispatch(("setCost " + cost).split(" "));
+    }
+
+    /**
+     * Runs {@code /tradeshop <args>} as the shop's owner.
+     *
+     * <p>Straight at the {@link PluginCommand}, not through
+     * {@code Bukkit.dispatchCommand}. Paper routes chat commands through its
+     * Brigadier dispatcher, which turns the sender into a vanilla command
+     * listener first and refuses anything that is not a connected player:
+     * "Cannot make HarnessPlayer(owner3) a vanilla command listener". That
+     * wrapper is the server's dispatch plumbing; everything this scenario is
+     * about is downstream of it. Calling the plugin command directly runs the
+     * whole of TradeShop's own chain - permission check, {@code CommandCaller},
+     * {@code CommandType} lookup, {@code SubCommand}, runner - and nothing of
+     * it is stubbed.
+     */
+    private void dispatch(String... args) {
+        PluginCommand command = Bukkit.getPluginCommand("tradeshop");
+        if (command == null) {
+            throw new AssertionError("the server does not know /tradeshop, so TradeShop did not "
+                    + "register its command");
+        }
+        run(() -> command.execute(owner, "tradeshop", args));
+    }
 
     /**
      * Line 1 is the product the shop gives, line 2 the cost it takes.

@@ -203,6 +203,99 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
             Assert.equal(10, scene.countInChest(Material.DIAMOND), "and the shop keeps its stock");
             Assert.equal(0, scene.countInChest(Material.EMERALD), "and is paid nothing");
         }));
+
+        // Creating a shop the other way a player can: from the chat bar.
+        //
+        // This path writes the sign itself rather than leaving it to a packet
+        // handler, so it is the one that lets the rest of the flows run - and
+        // the sign assertions below read the real block with nothing copied back
+        // onto it by the harness.
+        scenarios.add(new Scenario("commandCreatedShopIsCompleteAndTheServerWritesItsSign", () -> {
+            RealShop scene = new RealShop(this, 3);
+            scene.placeChestAndSign();
+            scene.createShopByCommand("1 DIAMOND", "1 EMERALD");
+
+            Shop shop = scene.get(() -> Shop.loadShop(new ShopLocation(scene.signBlock().getLocation())));
+
+            Assert.that(shop != null, "no shop was stored at the sign's location");
+            Assert.equal(ShopType.TRADE, shop.getShopType(), "the shop should be a trade shop");
+            Assert.equal(scene.owner().getUniqueId(), shop.getOwner().getUUID(),
+                    "the player who ran the command should own the shop");
+            Assert.equal(scene.get(() -> scene.chestBlock().getLocation()), shop.getInventoryLocation(),
+                    "the shop should be linked to the chest under the sign");
+
+            // "Complete" is a property of the shop, not of a message: a shop is
+            // incomplete while either side is empty. /tradeshop create alone
+            // leaves it that way, which is why setProduct and setCost follow.
+            Assert.that(!shop.isMissingItems(),
+                    "both sides should be set, so the shop is no longer incomplete");
+            Assert.equal(ShopStatus.OUT_OF_STOCK, shop.getStatus(),
+                    "a complete shop with an empty chest is out of stock, not incomplete");
+
+            // Read off the real block. TradeShop put every one of these there
+            // through sign.update().
+            Assert.equal(ShopType.TRADE.toHeader(), scene.signLines()[0],
+                    "line 0 is the shop's header");
+            Assert.equal("1 Diamond", scene.signLines()[1], "line 1 is what the shop gives");
+            Assert.equal("1 Emerald", scene.signLines()[2], "line 2 is what the shop takes");
+            Assert.equal(strip(ShopStatus.OUT_OF_STOCK.getLine()), scene.signLines()[3],
+                    "line 3 is where a player reads the shop's status");
+        }));
+
+        // Stocking a shop: the owner puts the product in the chest and shuts the
+        // lid, and the sign is supposed to notice.
+        scenarios.add(new Scenario("closingTheChestAfterStockingItOpensTheShop", () -> {
+            RealShop scene = new RealShop(this, 4);
+            scene.placeChestAndSign();
+            scene.createShopByCommand("1 DIAMOND", "1 EMERALD");
+
+            Assert.equal(ShopStatus.OUT_OF_STOCK,
+                    scene.get(() -> Shop.loadShop(new ShopLocation(scene.signBlock().getLocation())).getStatus()),
+                    "precondition: the shop starts empty");
+
+            scene.stockShop(new ItemStack(Material.DIAMOND, 10));
+            scene.closeChestAsOwner();
+
+            Assert.eventually(15_000, "a stocked shop to report itself open",
+                    scene.onServer(() -> Shop.loadShop(new ShopLocation(scene.signBlock().getLocation()))
+                            .getStatus() == ShopStatus.OPEN));
+
+            Shop shop = scene.get(() -> Shop.loadShop(new ShopLocation(scene.signBlock().getLocation())));
+            Assert.equal(10, shop.getAvailableTrades(), "ten diamonds at one per trade is ten trades");
+
+            // Nothing in this harness ever writes a sign. Line 3 says what it
+            // says because TradeShop called sign.update() and a real server
+            // obeyed - the assertion the tier-1 suite cannot make.
+            Assert.equal(strip(ShopStatus.OPEN.getLine()), scene.signLines()[3],
+                    "line 3 should have been rewritten on the block the server stored");
+        }));
+
+        // The trade itself: the thing a human would otherwise log in, place a
+        // chest, write a sign and click to check. Same four movements the tier-1
+        // suite asserts, so a divergence between tiers is visible rather than
+        // arguable.
+        scenarios.add(new Scenario("buyerWithEnoughCostReceivesTheProduct", () -> {
+            RealShop scene = new RealShop(this, 5);
+            scene.placeChestAndSign();
+            scene.createShopByCommand("1 DIAMOND", "1 EMERALD");
+            scene.stockShop(new ItemStack(Material.DIAMOND, 10));
+            scene.closeChestAsOwner();
+
+            Assert.eventually(15_000, "the shop to be open before anyone trades with it",
+                    scene.onServer(() -> Shop.loadShop(new ShopLocation(scene.signBlock().getLocation()))
+                            .getStatus() == ShopStatus.OPEN));
+
+            Player buyer = scene.buyerHolding(new ItemStack(Material.EMERALD, 5));
+            scene.rightClickSign(buyer);
+
+            Assert.eventually(15_000, "the buyer to be holding a diamond",
+                    scene.onServer(() -> scene.rawCountOf(buyer, Material.DIAMOND) == 1));
+
+            Assert.equal(1, scene.countOf(buyer, Material.DIAMOND), "buyer should have received one diamond");
+            Assert.equal(4, scene.countOf(buyer, Material.EMERALD), "buyer should have paid one emerald");
+            Assert.equal(1, scene.countInChest(Material.EMERALD), "the emerald should be in the shop chest");
+            Assert.equal(9, scene.countInChest(Material.DIAMOND), "the shop should have one fewer diamond");
+        }));
     }
 
     private static String strip(String coloured) {

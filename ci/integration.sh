@@ -54,7 +54,7 @@ BKCL_SHA256=e7b15d76898834a0b7e8a080982a3f24c69b4a82e87a1e5ec29bce8d17045c46
 
 # A scenario that did not run is a failure, so the count is asserted here rather
 # than read out of the report the run itself produced.
-EXPECTED_SCENARIOS=3
+EXPECTED_SCENARIOS=6
 
 # Boot to "Done" is ~10s bare and ~24s with BKCommonLib on the reference
 # machine. The timeout is generous because a timeout is a failure and never a
