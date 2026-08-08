@@ -1,5 +1,8 @@
 # Compiled binaries
 /target/
+# it/ is a sibling Maven project, not a module, so its build output is a second
+# target/ that the root-anchored rule above does not reach.
+/it/target/
 *.class
 /bin/
 
