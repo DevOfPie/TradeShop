@@ -17,11 +17,22 @@
 package org.shanerx.tradeshop.it;
 
 import org.bukkit.Bukkit;
+import org.bukkit.ChatColor;
+import org.bukkit.Material;
+import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
+import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.block.SignChangeEvent;
 import org.bukkit.event.server.ServerLoadEvent;
+import org.bukkit.inventory.ItemStack;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.shanerx.tradeshop.shop.Shop;
+import org.shanerx.tradeshop.shop.ShopChest;
+import org.shanerx.tradeshop.shop.ShopStatus;
+import org.shanerx.tradeshop.shop.ShopType;
+import org.shanerx.tradeshop.shoplocation.ShopLocation;
 
 import java.io.IOException;
 import java.io.PrintWriter;
@@ -29,6 +40,7 @@ import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -60,11 +72,20 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
 
     private final List<Scenario> scenarios = new ArrayList<>();
 
+    /**
+     * The finished lines of the last sign edit, as every plugin left them.
+     *
+     * <p>Volatile because it is written on the server thread and read from the
+     * scenario thread.
+     */
+    private volatile String[] lastSignEventLines = new String[0];
+
     @Override
     public void onEnable() {
         register();
         getServer().getPluginManager().registerEvents(this, this);
         getLogger().info("integration harness armed with " + scenarios.size() + " scenario(s)"
+                + ", trade header is " + ShopType.TRADE.toHeader()
                 + (INDUCE.isEmpty() ? "" : ", INDUCED FAILURE MODE: " + INDUCE));
     }
 
@@ -78,18 +99,148 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
             Assert.that(tradeShop.isEnabled(),
                     "TradeShop is installed but not enabled - onEnable threw, and the server carried on");
         }));
+
+        // Writing a shop sign on a chest: the first thing a human tester does,
+        // and the gate everything else is behind.
+        scenarios.add(new Scenario("signOnAChestCreatesAShop", () -> {
+            RealShop scene = new RealShop(this, 1);
+            scene.placeChestAndSign();
+            scene.createShop(ShopType.TRADE.toHeader(), "1 DIAMOND", "1 EMERALD");
+
+            Shop shop = scene.get(() -> Shop.loadShop(new ShopLocation(scene.signBlock().getLocation())));
+
+            Assert.that(shop != null, "no shop was stored at the sign's location");
+            Assert.equal(ShopType.TRADE, shop.getShopType(), "the shop should be a trade shop");
+            Assert.equal(scene.owner().getUniqueId(), shop.getOwner().getUUID(),
+                    "the signer should own the shop");
+            Assert.equal(scene.get(() -> scene.signBlock().getRelative(0, -1, 0).getLocation()),
+                    shop.getInventoryLocation(),
+                    "the shop should be linked to the chest under the sign");
+
+            // Unlike tier 1, the shop was written to a real data file on disk by
+            // the real plugin, and read back out of it.
+            Assert.equal(ShopStatus.OUT_OF_STOCK, shop.getStatus(),
+                    "nothing has been put in the chest yet");
+
+            // TradeShop decorated the EVENT's lines, which is all a plugin can
+            // do during a sign edit...
+            Assert.equal(strip(ShopStatus.OUT_OF_STOCK.getLine()), strip(lastSignEventLines[3]),
+                    "line 3 of the finished sign edit is where a player reads the shop's status");
+
+            // ...and the block is still blank, because writing those lines back
+            // is done by the packet handler that fired the event, not by the
+            // event bus. No client, no packet, no write. That is a property of
+            // the server, not a gap in this harness, and it is asserted rather
+            // than worked around: the sign assertions that matter are in the
+            // stocking scenario, where TradeShop calls sign.update() itself.
+            Assert.equal("", scene.signLines()[0],
+                    "the server writes a sign edit back from the packet handler, so a synthetic "
+                            + "event must leave the block untouched");
+        }));
+
+        // Stocking and trading, and the wall they hit.
+        //
+        // THIS SCENARIO ASSERTS A BLOCKER, NOT CORRECT BEHAVIOUR. It is green
+        // because the situation it describes is real, and it must go red the
+        // moment a real client drives the sign edit - at which point it is
+        // deleted and replaced by the stock and trade flows it is standing in
+        // for. Read the failure as "the blocker is gone", not as a regression.
+        //
+        // The chain: TradeShop's Shop.updateSign() starts at getShopSign(),
+        // which returns null unless the sign BLOCK already reads as a shop sign.
+        // The block only reads that way once a sign edit has been written back
+        // onto it, and that write is done by the packet handler that fired
+        // SignChangeEvent, not by the event bus. A harness that fires the event
+        // itself is not a packet handler, so the block stays blank, the sign is
+        // never updated, the status never leaves OUT_OF_STOCK, and a click on
+        // the sign is not recognised as a click on a shop.
+        //
+        // Copying the event's finished lines onto the block is exactly the
+        // workaround tier 1 carries, and reintroducing it here is the one thing
+        // this unit says not to do quietly. So the chain is documented instead.
+        scenarios.add(new Scenario("aSyntheticSignEditLeavesTheBlockBlankSoTheShopNeverOpens", () -> {
+            RealShop scene = new RealShop(this, 2);
+            scene.placeChestAndSign();
+            scene.createShop(ShopType.TRADE.toHeader(), "1 DIAMOND", "1 EMERALD");
+
+            scene.stockShop(new ItemStack(Material.DIAMOND, 10));
+            Assert.equal(10, scene.countInChest(Material.DIAMOND),
+                    "the diamonds should be in the chest before the lid closes");
+            Assert.that(scene.get(() -> ShopChest.isShopChest(scene.chestBlock())),
+                    "the chest under the sign should be linked to the shop");
+            Assert.that(scene.get(() -> ShopChest.isShopChest(scene.chestInventory())),
+                    "the chest's inventory is what the close event carries, and it is how "
+                            + "TradeShop finds the shop again");
+
+            scene.closeChestAsOwner();
+
+            // TradeShop did react to the close: it recounted the stock, on the
+            // real chest, and got the right answer. Everything up to the sign
+            // works.
+            Assert.eventually(15_000, "TradeShop to recount the stock in the chest",
+                    scene.onServer(() -> Shop.loadShop(new ShopLocation(scene.signBlock().getLocation()))
+                            .getAvailableTrades() == 10));
+
+            Shop shop = scene.get(() -> Shop.loadShop(new ShopLocation(scene.signBlock().getLocation())));
+
+            Assert.that(scene.get(() -> shop.getShopSign()) == null,
+                    "getShopSign() is null while the block is blank, which is what stops the "
+                            + "status from ever being recomputed");
+            Assert.equal(ShopStatus.OUT_OF_STOCK, shop.getStatus(),
+                    "ten trades are available and the shop still says out of stock, because "
+                            + "updateStatus() is only reached through the sign");
+            Assert.equal("", scene.signLines()[3],
+                    "and the sign the server stored is still blank");
+
+            // And so the trade cannot happen either: the click lands on a block
+            // that does not read as a shop sign.
+            Player buyer = scene.buyerHolding(new ItemStack(Material.EMERALD, 5));
+            scene.rightClickSign(buyer);
+
+            Assert.equal(0, scene.countOf(buyer, Material.DIAMOND),
+                    "no product moves, because the clicked block is not a shop sign");
+            Assert.equal(5, scene.countOf(buyer, Material.EMERALD), "and no cost is taken");
+            Assert.equal(10, scene.countInChest(Material.DIAMOND), "and the shop keeps its stock");
+            Assert.equal(0, scene.countInChest(Material.EMERALD), "and is paid nothing");
+        }));
+    }
+
+    private static String strip(String coloured) {
+        return ChatColor.stripColor(coloured);
     }
 
     /**
-     * Scenarios run a tick after the server reports itself loaded.
+     * Scenarios run a second after the server reports itself loaded, and off the
+     * server thread.
      *
      * <p>{@link ServerLoadEvent} fires once the worlds and every plugin are up,
      * which is the earliest moment a scenario can touch a real block and get a
-     * real answer.
+     * real answer. Off-thread because a scenario's job is partly to wait -
+     * TradeShop reads stock when a chest closes and does disk work on the main
+     * thread - and waiting on the main thread is waiting for yourself. Every
+     * call that touches the world is marshalled back; see {@link RealShop}.
      */
+    /**
+     * What every plugin, TradeShop included, left on a sign edit.
+     *
+     * <p>Recorded at {@code MONITOR}, after TradeShop's {@code HIGHEST} handler.
+     * These are the lines a real server would then write onto the block - the
+     * write is done by the packet handler that fired the event, not by the event
+     * bus, so a harness that fires the event itself never sees them land. Logging
+     * them makes the difference between "TradeShop did not decorate the sign" and
+     * "TradeShop decorated the sign and nothing wrote it back" readable from the
+     * console instead of arguable.
+     */
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void afterSignChange(SignChangeEvent event) {
+        lastSignEventLines = event.getLines().clone();
+        getLogger().info("sign event lines after every plugin ran: " + Arrays.toString(event.getLines())
+                + " cancelled=" + event.isCancelled());
+    }
+
     @EventHandler
     public void onServerLoad(ServerLoadEvent event) {
-        getServer().getScheduler().runTaskLater(this, this::runEverything, 20L);
+        getServer().getScheduler().runTaskLaterAsynchronously(this, this::runEverything, 20L);
     }
 
     private void runEverything() {
@@ -122,7 +273,9 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
         }
 
         writeResult(lines);
-        Bukkit.shutdown();
+        // Back onto the server thread to stop it: the runner boots this server
+        // with stdin closed, so nothing can type "stop" at it.
+        getServer().getScheduler().runTask(this, Bukkit::shutdown);
     }
 
     private String run(Scenario scenario) {

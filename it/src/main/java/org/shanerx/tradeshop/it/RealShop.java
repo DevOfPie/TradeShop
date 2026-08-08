@@ -1,0 +1,287 @@
+/*
+ * Copyright (c) 2016-2026
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  you may not use this file except in compliance with the License.
+ *  You may obtain a copy of the License at
+ *
+ *                http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ */
+
+package org.shanerx.tradeshop.it;
+
+import org.bukkit.Bukkit;
+import org.bukkit.ChatColor;
+import org.bukkit.Material;
+import org.bukkit.World;
+import org.bukkit.block.Block;
+import org.bukkit.block.Container;
+import org.bukkit.block.Sign;
+import org.bukkit.block.BlockFace;
+import org.bukkit.block.sign.Side;
+import org.bukkit.entity.Player;
+import org.bukkit.event.block.Action;
+import org.bukkit.event.block.SignChangeEvent;
+import org.bukkit.event.inventory.InventoryCloseEvent;
+import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.inventory.ItemStack;
+import org.bukkit.plugin.Plugin;
+
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.function.Supplier;
+
+/**
+ * A chest with a TradeShop sign on it, on a real server, and the moves a player
+ * would make to use it.
+ *
+ * <p>Same vocabulary as the tier-1 harness on purpose - {@code createShop},
+ * {@code stockShop}, {@code closeChestAsOwner}, {@code rightClickSign},
+ * {@code countInChest} - so that a divergence between the two tiers reads as a
+ * divergence rather than as two unrelated tests.
+ *
+ * <h2>Isolation</h2>
+ * Every scenario gets its own patch of the world, a thousand blocks from the
+ * last. TradeShop keys every shop, chest linkage and protection entry by world
+ * name plus coordinates, so coordinates nobody has used are a namespace nobody
+ * has written to - which matters more here than in tier 1, because here the data
+ * store is a real file that survives the scenario.
+ *
+ * <h2>Threads</h2>
+ * Scenarios run off the main thread so that they can wait for the server without
+ * stopping it, and every call that touches the world is marshalled back onto the
+ * main thread. Waiting is the point: TradeShop reads stock on
+ * {@code InventoryCloseEvent} and does disk work on the main thread, so an
+ * assertion can genuinely arrive before the plugin has caught up.
+ */
+final class RealShop {
+
+    private static final int CHEST_Y = 0;
+    private static final long SYNC_TIMEOUT_SECONDS = 30;
+
+    private final Plugin plugin;
+    private final int index;
+
+    private Block chestBlock;
+    private Block signBlock;
+    private Player owner;
+
+    RealShop(Plugin plugin, int index) {
+        this.plugin = plugin;
+        this.index = index;
+    }
+
+    // ------------------------------------------------------------------
+    // Setup
+    // ------------------------------------------------------------------
+
+    void placeChestAndSign() {
+        run(() -> {
+            World world = Bukkit.getWorlds().get(0);
+            int x = index * 1000;
+
+            chestBlock = world.getBlockAt(x, CHEST_Y, 0);
+            signBlock = world.getBlockAt(x, CHEST_Y + 1, 0);
+
+            // Physics off: a standing sign with nothing solid under it pops off
+            // as an item the moment the server ticks the block, and the chest is
+            // placed in the same breath.
+            chestBlock.setType(Material.CHEST, false);
+            signBlock.setType(Material.OAK_SIGN, false);
+
+            owner = HarnessPlayer.create("owner" + index, chestBlock.getLocation().add(0.5, 1, 1.5));
+        });
+    }
+
+    // ------------------------------------------------------------------
+    // The three flows
+    // ------------------------------------------------------------------
+
+    /**
+     * Line 1 is the product the shop gives, line 2 the cost it takes.
+     *
+     * <p>The sign block is left blank and only the event carries the text, which
+     * is the state a real server is in while the event runs. CraftBukkit's
+     * packet handler builds the new sign text from the packet, fires
+     * {@link SignChangeEvent} with it, and writes it onto the block
+     * <em>afterwards</em>, only if nothing cancelled the event. The block still
+     * holds its old contents while every listener runs.
+     *
+     * <p>Getting this backwards is not a detail: writing the header onto the
+     * block first makes {@code ShopProtectionListener} - which cancels an edit
+     * to a block that is already a shop sign - cancel the very edit that was
+     * meant to create the shop, and no shop is created at all.
+     *
+     * <p>Nothing here copies the event's finished lines back onto the block.
+     * That is the step the tier-1 harness has to perform by hand, and leaving it
+     * out is what makes the later assertions about sign contents mean something:
+     * anything on this sign got there because TradeShop wrote it through the
+     * server.
+     */
+    void createShop(String header, String product, String cost) {
+        run(() -> Bukkit.getPluginManager().callEvent(
+                new SignChangeEvent(signBlock, owner, new String[]{header, product, cost, ""})));
+    }
+
+    /**
+     * The owner puts the product in the chest.
+     *
+     * <p>No {@code update()} afterwards, and that is not an omission. A
+     * {@code BlockState} obtained from a placed block is a snapshot of the
+     * block's data but hands out the <em>live</em> inventory, so the items are
+     * already in the chest by the time {@code addItem} returns - and calling
+     * {@code update()} would write the stale snapshot back over them, emptying
+     * the chest again. The tier-1 harness calls {@code update()} because
+     * MockBukkit's block states behave the other way round.
+     */
+    void stockShop(ItemStack stock) {
+        run(() -> ((Container) chestBlock.getState()).getInventory().addItem(stock));
+    }
+
+    /**
+     * The owner shuts the chest, which is the moment the plugin re-reads stock.
+     */
+    void closeChestAsOwner() {
+        run(() -> Bukkit.getPluginManager().callEvent(new InventoryCloseEvent(
+                HarnessPlayer.viewOf(owner, ((Container) chestBlock.getState()).getInventory()))));
+    }
+
+    Player buyerHolding(ItemStack held) {
+        return get(() -> {
+            Player buyer = HarnessPlayer.create("buyer" + index, signBlock.getLocation().add(0.5, 0, 1.5));
+            buyer.getInventory().addItem(held);
+            return buyer;
+        });
+    }
+
+    void rightClickSign(Player player) {
+        run(() -> Bukkit.getPluginManager().callEvent(new PlayerInteractEvent(
+                player, Action.RIGHT_CLICK_BLOCK, null, signBlock, BlockFace.NORTH)));
+    }
+
+    // ------------------------------------------------------------------
+    // Reading the world back
+    // ------------------------------------------------------------------
+
+    /**
+     * The sign's lines as the server holds them, colour stripped.
+     *
+     * <p>Read from the block, never from the event. The tier-1 harness has to
+     * copy a {@code SignChangeEvent}'s finished lines onto the block itself
+     * because MockBukkit never does; this reads whatever the server actually
+     * stored.
+     */
+    String[] signLines() {
+        return get(() -> {
+            String[] raw = ((Sign) signBlock.getState()).getSide(Side.FRONT).getLines();
+            String[] clean = new String[raw.length];
+            for (int i = 0; i < raw.length; i++) {
+                clean[i] = ChatColor.stripColor(raw[i]);
+            }
+            return clean;
+        });
+    }
+
+    int countOf(Player player, Material material) {
+        return get(() -> rawCountOf(player, material));
+    }
+
+    int countInChest(Material material) {
+        return get(() -> rawCountInChest(material));
+    }
+
+    /**
+     * As {@link #countOf}, but already on the server thread.
+     *
+     * <p>Separate because {@link #onServer} runs its condition on the main
+     * thread: a marshalling call nested inside a marshalled block would be
+     * waiting for the thread it is already on.
+     */
+    int rawCountOf(Player player, Material material) {
+        return count(player.getInventory().getContents(), material);
+    }
+
+    int rawCountInChest(Material material) {
+        return count(((Container) chestBlock.getState()).getInventory().getContents(), material);
+    }
+
+    Block signBlock() {
+        return signBlock;
+    }
+
+    Block chestBlock() {
+        return chestBlock;
+    }
+
+    /** The chest's live inventory, exactly as {@link #closeChestAsOwner} passes it. */
+    org.bukkit.inventory.Inventory chestInventory() {
+        return ((Container) chestBlock.getState()).getInventory();
+    }
+
+    Player owner() {
+        return owner;
+    }
+
+    private int count(ItemStack[] contents, Material material) {
+        int total = 0;
+        for (ItemStack stack : contents) {
+            if (stack != null && stack.getType() == material) {
+                total += stack.getAmount();
+            }
+        }
+        return total;
+    }
+
+    // ------------------------------------------------------------------
+    // Main-thread marshalling
+    // ------------------------------------------------------------------
+
+    void run(Runnable body) {
+        get(() -> {
+            body.run();
+            return null;
+        });
+    }
+
+    /**
+     * Runs {@code body} on the server's main thread and waits for its answer.
+     *
+     * <p>Everything in this class goes through here. The scenario thread is not
+     * the server thread, and Bukkit will refuse - loudly, which is the right
+     * behaviour - any world access from anywhere else.
+     */
+    <T> T get(Callable<T> body) {
+        if (Bukkit.isPrimaryThread()) {
+            throw new IllegalStateException("scenarios must not run on the server thread: "
+                    + "they wait for the server, and waiting on the server thread is a deadlock");
+        }
+        try {
+            return Bukkit.getScheduler().callSyncMethod(plugin, body).get(SYNC_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        } catch (TimeoutException e) {
+            throw new AssertionError("the server did not run a scheduled task within "
+                    + SYNC_TIMEOUT_SECONDS + "s - it is stuck, and a timeout is a failure");
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause() == null ? e : e.getCause();
+            if (cause instanceof AssertionError error) {
+                throw error;
+            }
+            throw new AssertionError(cause.toString(), cause);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError("interrupted while waiting for the server");
+        }
+    }
+
+    /** A condition evaluated on the main thread, for {@link Assert#eventually}. */
+    java.util.function.BooleanSupplier onServer(Supplier<Boolean> condition) {
+        return () -> get(condition::get);
+    }
+}
