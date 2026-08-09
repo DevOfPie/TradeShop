@@ -19,6 +19,8 @@ package org.shanerx.tradeshop.it;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.Material;
+import org.bukkit.block.Block;
+import org.bukkit.block.BlockFace;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -33,6 +35,7 @@ import org.shanerx.tradeshop.shop.Shop;
 import org.shanerx.tradeshop.shop.ShopChest;
 import org.shanerx.tradeshop.shop.ShopStatus;
 import org.shanerx.tradeshop.shop.ShopType;
+import org.shanerx.tradeshop.shop.listeners.ShopProtectionListener;
 import org.shanerx.tradeshop.shoplocation.ShopLocation;
 
 import java.io.IOException;
@@ -354,6 +357,44 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
                 () -> shopOnSignMaterial(14, "OAK_WALL_HANGING_SIGN",
                         "the catalogue built <WOOD>_HANGING_WALL_SIGN, which matches no material, "
                                 + "so no wall-hanging sign was ever recognised")));
+
+        // Which block an explosion has to spare to leave a shop sign standing.
+        // The wall-hanging mounting is the one that was wrong, and it is here
+        // because MockBukkit cannot build a block state for it; the two
+        // mountings the mock can represent are asserted at tier 1.
+        scenarios.add(new Scenario("hangingSignSupportsAreTheBlocksHoldingItUp", () -> {
+            Material wallHanging = Material.matchMaterial("OAK_WALL_HANGING_SIGN");
+            Material ceilingHanging = Material.matchMaterial("OAK_HANGING_SIGN");
+            Assert.that(wallHanging != null && ceilingHanging != null,
+                    "hanging signs do not exist on this server (" + Bukkit.getBukkitVersion()
+                            + "), so this scenario would have proved nothing");
+
+            RealShop scene = new RealShop(this, 15);
+            scene.placeChestAndSign(wallHanging);
+            Block sign = scene.signBlock();
+
+            List<Block> wallSupports = scene.get(() -> ShopProtectionListener.supportingBlocks(sign));
+
+            // The defect: contains("WALL_SIGN") is false for OAK_WALL_HANGING_SIGN,
+            // so this sign was treated as a standing sign and the block below it
+            // was protected instead of the wall actually holding it up.
+            Assert.equal(2, wallSupports.size(),
+                    "a wall hanging sign survives on either of the two blocks it spans, so both "
+                            + "have to be spared");
+            for (Block support : wallSupports) {
+                Assert.equal(scene.get(sign::getY), support.getY(),
+                        "a wall hanging sign is held from the side, not from underneath - the "
+                                + "block below it is what the old string test protected");
+            }
+
+            scene.placeChestAndSign(ceilingHanging);
+            Block ceiling = scene.signBlock();
+            List<Block> ceilingSupports = scene.get(() -> ShopProtectionListener.supportingBlocks(ceiling));
+
+            Assert.equal(1, ceilingSupports.size(), "a ceiling hanging sign hangs from one block");
+            Assert.equal(scene.get(() -> ceiling.getRelative(BlockFace.UP)), ceilingSupports.get(0),
+                    "and that block is above it, which no branch of the old test could return");
+        }));
 
         // Tab completion, built from the live item registry rather than from a
         // blocklist that stopped being updated. Here as well as at tier 1
