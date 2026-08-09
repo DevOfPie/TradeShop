@@ -16,8 +16,18 @@
 # publisher for repo.killerofpie.com and this file writes no artifact anywhere.
 # `permissions:` is still contents: read. There is still no schedule: and no
 # workflow_dispatch:, so it cannot run except in response to a push or a pull
-# request. What it does change is which branches that covers: all of them,
-# instead of 2.6.2-revert-save alone.
+# request. Triggers are untouched, `runs-on` is untouched, and JAVA_VERSION is
+# untouched. Nothing about what runs on push changes except that Node is present
+# before it runs.
+#
+# What it adds is one step: a Node toolchain, because ci/build.sh now also runs a
+# real Minecraft client against the server it boots. That client is
+# `it-client/play.js`, driven by Mineflayer and pinned by `it-client/package-lock.json`;
+# ci/integration.sh installs it with `npm ci`, which refuses to run if the
+# lockfile and package.json disagree. Without this step `ci/integration.sh` fails
+# on "node is required and is not on PATH" — deliberately, because the tier it
+# drives is the only one that exercises sign editing and the container-click
+# paths, and skipping a tier turns a gate into a green light.
 
 name: Build
 
@@ -46,6 +56,12 @@ env:
   # bytecode (class major version 61) and a JDK 8 javac cannot read it.
   JAVA_VERSION: "21"
 
+  # The tier-3 client's runtime. Pinned to a major line rather than a patch: the
+  # dependency tree that actually matters is locked by it-client/package-lock.json,
+  # and pinning Node to a patch as well buys nothing while going stale on its own
+  # schedule. 24 is what the tier was built and measured on.
+  NODE_VERSION: "24"
+
 jobs:
   build:
     name: Build and shade
@@ -57,5 +73,10 @@ jobs:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
           cache: maven
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: it-client/package-lock.json
       - name: Build
         run: sh ci/build.sh
