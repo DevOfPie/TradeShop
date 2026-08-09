@@ -51,11 +51,11 @@ import org.shanerx.tradeshop.utils.debug.DebugLevels;
 import org.shanerx.tradeshop.utils.gsonprocessing.GsonProcessor;
 import org.shanerx.tradeshop.utils.objects.ObjectHolder;
 import org.shanerx.tradeshop.utils.simplix.serializers.ConfSerSerializer;
-import org.yaml.snakeyaml.external.biz.base64Coder.Base64Coder;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -742,7 +742,7 @@ public class ShopItemStack implements Cloneable {
         if (itemStack == null) {
             if (hasBase64()) {
                 try {
-                    ByteArrayInputStream inputStream = new ByteArrayInputStream(Base64Coder.decodeLines(itemStackB64));
+                    ByteArrayInputStream inputStream = new ByteArrayInputStream(Base64.getMimeDecoder().decode(itemStackB64));
                     BukkitObjectInputStream dataInput = new BukkitObjectInputStream(inputStream);
 
                     // Read the serialized inventory
@@ -821,7 +821,7 @@ class ShopItemStackBuilder {
     private void processB64() {
         if (itemStack == null && !itemStackB64.isEmpty()) {
             try {
-                ByteArrayInputStream inputStream = new ByteArrayInputStream(Base64Coder.decodeLines(itemStackB64));
+                ByteArrayInputStream inputStream = new ByteArrayInputStream(Base64.getMimeDecoder().decode(itemStackB64));
                 BukkitObjectInputStream dataInput = new BukkitObjectInputStream(inputStream);
 
                 // Read the serialized inventory

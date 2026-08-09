@@ -46,7 +46,6 @@ import org.shanerx.tradeshop.shop.ShopStatus;
 import org.shanerx.tradeshop.shoplocation.ShopLocation;
 import org.shanerx.tradeshop.utils.gsonprocessing.GsonProcessor;
 import org.shanerx.tradeshop.utils.simplix.serializers.ConfSerSerializer;
-import org.yaml.snakeyaml.external.biz.base64Coder.Base64Coder;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -56,6 +55,7 @@ import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
@@ -626,7 +626,11 @@ final class ItemMatrix {
              BukkitObjectOutputStream out = new BukkitObjectOutputStream(bytes)) {
             out.writeObject(item);
             out.flush();
-            return Base64Coder.encodeLines(bytes.toByteArray());
+            // MIME base64, which is what SnakeYAML's Base64Coder.encodeLines wrote:
+            // 76-character lines. That class is a SnakeYAML internal and is absent from
+            // Paper 26.2, so the fixture is built with the JDK's own encoder - same
+            // wire format, one fewer dependency on a server internal.
+            return Base64.getMimeEncoder().encodeToString(bytes.toByteArray());
         } catch (Exception e) {
             throw new AssertionError("could not build the base64 encoding this row is about: " + e, e);
         }
