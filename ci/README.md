@@ -54,8 +54,9 @@ the split below.
 | What a check actually does | `ci/*.sh` | No |
 | Surefire config, plugin versions, dependency pins | `pom.xml` | No |
 | Triggers, `permissions:`, `concurrency:` | `.github/workflows/` | **Yes** |
-| `JAVA_VERSION`, `runs-on` | `.github/workflows/` | **Yes** |
+| `JAVA_VERSION`, `NODE_VERSION`, `runs-on` | `.github/workflows/` | **Yes** |
 | Action versions and their pins | `.github/workflows/` | **Yes** |
+| Which npm packages the tier-3 client uses | `it-client/package.json` + its lockfile | No |
 
 The left column is the common case and the right column is not, which is what
 makes the manual step affordable. Adding a check is a script edit that reaches
@@ -65,6 +66,15 @@ the next push; changing what CI *is* takes a proposal.
 tests, because MockBukkit reports unimplemented API as a skip and a build that
 skips everything still exits 0 — is surefire configuration and a script edit.
 Neither needs a proposal.
+
+**And it matters for the tier-3 client**, which is where the split stops being
+free. `ci/integration.sh` now drives a real Minecraft client, so the run needs a
+Node toolchain, and `actions/setup-node` can only be added to
+`.github/workflows/` — hence `ci/proposed/maven.yml`. Note what the proposal does
+and does not buy: `ubuntu-latest` already ships a Node, so the pin is about
+knowing *which* one every run used rather than about making the tier possible at
+all. A tier whose toolchain version is whatever the runner image happened to
+carry that month is a tier that will one day fail for a reason nobody can name.
 
 `sh ci/workflow-proposals.sh` prints which proposals are pending, with a diff
 against the live file. It is deliberately **not** a gate and always exits 0: a

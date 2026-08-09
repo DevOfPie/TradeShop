@@ -70,7 +70,19 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
      */
     private static final String INDUCE = System.getProperty("tradeshop.it.induce", "");
 
+    /**
+     * Tier 3: keep the server alive after the scenarios below, and let a real
+     * client drive the rest. Set by {@code ci/integration.sh}. Off by default, so
+     * that a tier-2 run on a machine with no Node toolchain is still exactly the
+     * run it was.
+     */
+    private static final boolean CLIENT = Boolean.parseBoolean(
+            System.getProperty("tradeshop.it.client", "false"));
+
     private final List<Scenario> scenarios = new ArrayList<>();
+
+    /** The tier-3 half, or null when this is a tier-2 run. */
+    private ClientPhase client;
 
     /**
      * The finished lines of the last sign edit, as every plugin left them.
@@ -84,9 +96,26 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
     public void onEnable() {
         register();
         getServer().getPluginManager().registerEvents(this, this);
-        getLogger().info("integration harness armed with " + scenarios.size() + " scenario(s)"
+        if (CLIENT) {
+            client = new ClientPhase(this);
+            client.wire();
+        }
+        getLogger().info("integration harness armed with " + declaredScenarios() + " scenario(s)"
+                + (CLIENT ? " (" + scenarios.size() + " in-server, " + ClientPhase.STEPS.size()
+                        + " driven by a real client)" : "")
                 + ", trade header is " + ShopType.TRADE.toHeader()
                 + (INDUCE.isEmpty() ? "" : ", INDUCED FAILURE MODE: " + INDUCE));
+    }
+
+    /**
+     * How many scenarios this run is on the hook for.
+     *
+     * <p>Written into the result file before any of them run, because "the suite
+     * ran fewer scenarios than it has" is the one failure a report produced by the
+     * run itself cannot catch.
+     */
+    private int declaredScenarios() {
+        return scenarios.size() + (CLIENT ? ClientPhase.STEPS.size() : 0);
     }
 
     /**
@@ -338,7 +367,7 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
 
     private void runEverything() {
         List<String> lines = new ArrayList<>();
-        lines.add("SCENARIOS " + scenarios.size());
+        lines.add("SCENARIOS " + declaredScenarios());
 
         for (int i = 0; i < scenarios.size(); i++) {
             Scenario scenario = scenarios.get(i);
@@ -361,7 +390,21 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
         }
 
         if ("hang".equals(INDUCE)) {
+            // Deliberately before the client phase is armed, so that "hang" stays
+            // the failure it already was: nothing writes the result, nothing stops
+            // the server, and the runner's timeout is the verdict. The runner does
+            // not launch a bot in this mode either - there would be nothing armed
+            // for it to report to.
             getLogger().info("INDUCED: not writing the result file, the runner must time out");
+            return;
+        }
+
+        if (CLIENT) {
+            // The server stays up from here, and that is the whole sequencing
+            // problem of tier 3 solved in one place: the client phase writes the
+            // result and stops the server itself, once the bot has finished or once
+            // its deadline has expired. See ClientPhase.
+            client.begin(lines);
             return;
         }
 
@@ -373,9 +416,7 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
 
     private String run(Scenario scenario) {
         try {
-            if ("assert".equals(INDUCE)) {
-                Assert.that(false, "INDUCED: " + scenario.name() + " was told to assert something false");
-            }
+            induceAssertionFailure(scenario.name());
             scenario.body().run();
             getLogger().info("PASS " + scenario.name());
             return "PASS";
@@ -388,13 +429,23 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
         }
     }
 
-    private String describe(Throwable t) {
+    /**
+     * The sabotage hook, shared with the tier-3 steps so that both halves of the
+     * suite can be shown to fail rather than only ever observed passing.
+     */
+    void induceAssertionFailure(String scenarioName) {
+        if ("assert".equals(INDUCE)) {
+            Assert.that(false, "INDUCED: " + scenarioName + " was told to assert something false");
+        }
+    }
+
+    String describe(Throwable t) {
         String message = t.getMessage();
         String detail = (message == null || message.isEmpty()) ? t.toString() : message;
         return detail.replace('\n', ' ').replace('\r', ' ');
     }
 
-    private void writeResult(List<String> lines) {
+    void writeResult(List<String> lines) {
         File marker = new File(System.getProperty("tradeshop.it.marker",
                 new File(getDataFolder().getParentFile().getParentFile(), "it-result.txt").getPath()));
 
