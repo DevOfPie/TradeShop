@@ -71,6 +71,13 @@ final class RealShop {
     private Block signBlock;
     private Player owner;
 
+    /**
+     * @param index the scenario's patch of the world, at x = {@code index * 1000}.
+     *              <b>7 is not available</b>: {@link ClientPhase} builds its site
+     *              at x = 7000 from {@code getHighestBlockYAt}, and a scenario
+     *              that has left blocks floating there moves the client's site
+     *              out from under the bot, which then fails to place anything.
+     */
     RealShop(Plugin plugin, int index) {
         this.plugin = plugin;
         this.index = index;
@@ -81,6 +88,17 @@ final class RealShop {
     // ------------------------------------------------------------------
 
     void placeChestAndSign() {
+        placeChestAndSign(Material.OAK_SIGN);
+    }
+
+    /**
+     * As {@link #placeChestAndSign()}, on a sign of the caller's choosing.
+     *
+     * <p>The wood and the mounting are the whole point of some scenarios: this
+     * server is newer than the one tier 1 mocks, so it is the only place a pale
+     * oak sign or a hanging sign exists at all.
+     */
+    void placeChestAndSign(Material signMaterial) {
         run(() -> {
             World world = Bukkit.getWorlds().get(0);
             int x = index * 1000;
@@ -90,9 +108,10 @@ final class RealShop {
 
             // Physics off: a standing sign with nothing solid under it pops off
             // as an item the moment the server ticks the block, and the chest is
-            // placed in the same breath.
+            // placed in the same breath. A hanging sign with nothing above it
+            // would go the same way, which is the other reason this is false.
             chestBlock.setType(Material.CHEST, false);
-            signBlock.setType(Material.OAK_SIGN, false);
+            signBlock.setType(signMaterial, false);
 
             owner = HarnessPlayer.create("owner" + index, chestBlock.getLocation().add(0.5, 1, 1.5), signBlock);
         });

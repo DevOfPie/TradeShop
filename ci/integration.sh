@@ -90,7 +90,12 @@ BKCL_SHA256=e7b15d76898834a0b7e8a080982a3f24c69b4a82e87a1e5ec29bce8d17045c46
 # the save-and-reload - all assert the behaviour a shop owner is entitled to and
 # now get it. The count went 28 -> 29 with the pre-component migration row, which
 # loads a real 1.20.4-era shop file off disk.
-EXPECTED_SCENARIOS=29
+#
+# W4 phase 3 took it 29 -> 32 with three sign scenarios that tier 1 cannot hold:
+# pale oak does not exist in MockBukkit's 1.21.1 material set, and MockBukkit
+# will not build a block state for a hanging sign of either mounting. This server
+# is 1.21.11 and all three are real blocks on it.
+EXPECTED_SCENARIOS=32
 
 # Tier 3. The client is not optional: a run that boots a server, plays nothing
 # and exits 0 is the vacuous pass this project treats as the worst possible
