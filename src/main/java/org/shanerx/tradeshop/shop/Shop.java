@@ -519,7 +519,7 @@ public class Shop {
         if (event == null || !event.getBlock().getLocation().equals(getShopLocation()))
             return;
 
-        String[] signLines = updateSignLines(Setting.SHOP_SIGN_DEFAULT_COLOURS.getMappedString(Signs.match(event.getBlock().getType()).name()));
+        String[] signLines = updateSignLines(ShopSign.getDefaultColour(event.getBlock().getType()));
 
         for (int i = 0; i < 4; i++) {
             event.setLine(i, signLines[i]);
@@ -535,7 +535,7 @@ public class Shop {
         if (sign == null || !sign.getLocation().equals(getShopLocation()))
             return;
 
-        String[] signLines = updateSignLines(Setting.SHOP_SIGN_DEFAULT_COLOURS.getMappedString(Signs.match(sign.getType()).name()));
+        String[] signLines = updateSignLines(ShopSign.getDefaultColour(sign.getType()));
 
         for (int i = 0; i < 4; i++) {
             sign.setLine(i, signLines[i]);

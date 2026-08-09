@@ -19,6 +19,8 @@ package org.shanerx.tradeshop.it;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.Material;
+import org.bukkit.block.Block;
+import org.bukkit.block.BlockFace;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -28,10 +30,12 @@ import org.bukkit.event.server.ServerLoadEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.shanerx.tradeshop.TradeShop;
 import org.shanerx.tradeshop.shop.Shop;
 import org.shanerx.tradeshop.shop.ShopChest;
 import org.shanerx.tradeshop.shop.ShopStatus;
 import org.shanerx.tradeshop.shop.ShopType;
+import org.shanerx.tradeshop.shop.listeners.ShopProtectionListener;
 import org.shanerx.tradeshop.shoplocation.ShopLocation;
 
 import java.io.IOException;
@@ -326,10 +330,141 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
             Assert.equal(9, scene.countInChest(Material.DIAMOND), "the shop should have one fewer diamond");
         }));
 
+        // The signs a shop can go on. These three are here rather than at tier 1
+        // because tier 1 cannot express them: MockBukkit's material set is its
+        // 1.21.1 line, so pale oak - added in 1.21.2 - does not exist there at
+        // all, and MockBukkit refuses to build a block state for a hanging sign
+        // ("Cannot create a SignMock from OAK_HANGING_SIGN"), so the create flow
+        // cannot be driven over one. This server is 1.21.11 and its signs are
+        // real blocks.
+        //
+        // Each names a defect in the hand-maintained sign catalogue that used to
+        // stand in ShopSign: a wood that was never added, a mounting whose
+        // material name was misspelt so it matched nothing, and a reverse lookup
+        // that threw on the names the catalogue did register.
+        scenarios.add(new Scenario("paleOakSignCanCarryAShop",
+                () -> shopOnSignMaterial(12, "PALE_OAK_SIGN",
+                        "pale oak was never in the twelve-wood catalogue, so a pale oak sign "
+                                + "could not be a shop")));
+
+        scenarios.add(new Scenario("hangingSignCanCarryAShop",
+                () -> shopOnSignMaterial(13, "OAK_HANGING_SIGN",
+                        "a hanging sign was registered as a shop sign and then threw from the "
+                                + "colour lookup, which called valueOf on a name that was never "
+                                + "a constant")));
+
+        scenarios.add(new Scenario("wallHangingSignCanCarryAShop",
+                () -> shopOnSignMaterial(14, "OAK_WALL_HANGING_SIGN",
+                        "the catalogue built <WOOD>_HANGING_WALL_SIGN, which matches no material, "
+                                + "so no wall-hanging sign was ever recognised")));
+
+        // Which block an explosion has to spare to leave a shop sign standing.
+        // The wall-hanging mounting is the one that was wrong, and it is here
+        // because MockBukkit cannot build a block state for it; the two
+        // mountings the mock can represent are asserted at tier 1.
+        scenarios.add(new Scenario("hangingSignSupportsAreTheBlocksHoldingItUp", () -> {
+            Material wallHanging = Material.matchMaterial("OAK_WALL_HANGING_SIGN");
+            Material ceilingHanging = Material.matchMaterial("OAK_HANGING_SIGN");
+            Assert.that(wallHanging != null && ceilingHanging != null,
+                    "hanging signs do not exist on this server (" + Bukkit.getBukkitVersion()
+                            + "), so this scenario would have proved nothing");
+
+            RealShop scene = new RealShop(this, 15);
+            scene.placeChestAndSign(wallHanging);
+            Block sign = scene.signBlock();
+
+            List<Block> wallSupports = scene.get(() -> ShopProtectionListener.supportingBlocks(sign));
+
+            // The defect: contains("WALL_SIGN") is false for OAK_WALL_HANGING_SIGN,
+            // so this sign was treated as a standing sign and the block below it
+            // was protected instead of the wall actually holding it up.
+            Assert.equal(2, wallSupports.size(),
+                    "a wall hanging sign survives on either of the two blocks it spans, so both "
+                            + "have to be spared");
+            for (Block support : wallSupports) {
+                Assert.equal(scene.get(sign::getY), support.getY(),
+                        "a wall hanging sign is held from the side, not from underneath - the "
+                                + "block below it is what the old string test protected");
+            }
+
+            scene.placeChestAndSign(ceilingHanging);
+            Block ceiling = scene.signBlock();
+            List<Block> ceilingSupports = scene.get(() -> ShopProtectionListener.supportingBlocks(ceiling));
+
+            Assert.equal(1, ceilingSupports.size(), "a ceiling hanging sign hangs from one block");
+            Assert.equal(scene.get(() -> ceiling.getRelative(BlockFace.UP)), ceilingSupports.get(0),
+                    "and that block is above it, which no branch of the old test could return");
+        }));
+
+        // Tab completion, built from the live item registry rather than from a
+        // blocklist that stopped being updated. Here as well as at tier 1
+        // because this is the only tier where the library's registry query - the
+        // implementation an operator actually gets - can run at all.
+        scenarios.add(new Scenario("tabCompleteOffersOnlyMaterialsWithAnItemForm", () -> {
+            List<String> offered = ((TradeShop) Bukkit.getPluginManager().getPlugin("TradeShop"))
+                    .getListManager().getGameMats();
+
+            Assert.that(offered.contains("DIAMOND"), "a diamond should be offered for trade");
+            Assert.that(offered.contains("PALE_OAK_SIGN"),
+                    "a pale oak sign is an item on this server and should be offered");
+
+            // Neither of these was in the sixty-nine constant blocklist, because
+            // neither existed when it was last edited.
+            Assert.that(!offered.contains("PALE_OAK_WALL_HANGING_SIGN"),
+                    "a wall-hanging sign has no item form and cannot be traded");
+            Assert.that(!offered.contains("PALE_OAK_WALL_SIGN"),
+                    "and neither can a wall sign");
+        }));
+
         // The item-metadata matrix. Kept in its own file because it is a suite
         // rather than a scenario, and because every row in it carries the reason a
         // cheaper tier would have lied about it. See ItemMatrix.
         scenarios.addAll(ItemMatrix.rows(this));
+    }
+
+    /**
+     * A shop created on one named sign material, end to end.
+     *
+     * <p>The material is named as a string and resolved against the running
+     * server on purpose. A constant would not compile against the 1.21.1 API
+     * this plugin is built with, and a scenario that silently did nothing
+     * because the material was absent is the vacuous pass this tier exists to
+     * close - so an unresolvable name is a failure with the version in it.
+     */
+    private void shopOnSignMaterial(int site, String materialName, String defect) {
+        Material signMaterial = Material.matchMaterial(materialName);
+        Assert.that(signMaterial != null, materialName + " does not exist on this server ("
+                + Bukkit.getBukkitVersion() + "), so this scenario would have proved nothing");
+
+        RealShop scene = new RealShop(this, site);
+        scene.placeChestAndSign(signMaterial);
+
+        Assert.that(!scene.get(() -> ShopType.isShop(scene.signBlock())),
+                "a blank sign is not a shop yet, which is the precondition the next line needs");
+
+        scene.createShopByCommand("1 DIAMOND", "1 EMERALD");
+
+        Shop shop = scene.get(() -> Shop.loadShop(new ShopLocation(scene.signBlock().getLocation())));
+        Assert.that(shop != null, "no shop was stored at the " + materialName + ": " + defect);
+        Assert.equal(ShopType.TRADE, shop.getShopType(), "the shop should be a trade shop");
+        Assert.equal(scene.get(() -> scene.chestBlock().getLocation()), shop.getInventoryLocation(),
+                "the shop should be linked to the chest under the sign");
+
+        // The block, not the event: TradeShop wrote these lines through the
+        // server, and writing them is the call that used to throw on a hanging
+        // sign.
+        Assert.that(scene.get(() -> ShopType.isShop(scene.signBlock())),
+                "the finished " + materialName + " should read as a shop sign");
+        Assert.equal(ShopType.TRADE.toHeader(), scene.signLines()[0], "line 0 is the shop's header");
+        Assert.equal("1 Diamond", scene.signLines()[1], "line 1 is what the shop gives");
+        Assert.equal("1 Emerald", scene.signLines()[2], "line 2 is what the shop takes");
+
+        // A sign whose colour lookup fell through would write the four
+        // characters "null" in front of the item line. It is worth one
+        // assertion, because nothing else about the shop would look wrong.
+        Assert.that(!scene.signLines()[1].contains("null"),
+                "the default colour for this wood did not resolve, and the literal text was "
+                        + "written onto the sign: " + scene.signLines()[1]);
     }
 
     private static String strip(String coloured) {

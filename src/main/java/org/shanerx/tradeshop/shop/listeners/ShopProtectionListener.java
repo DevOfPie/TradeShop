@@ -31,6 +31,8 @@ import org.bukkit.block.BlockFace;
 import org.bukkit.block.Sign;
 import org.bukkit.block.data.BlockData;
 import org.bukkit.block.data.Directional;
+import org.bukkit.block.data.type.HangingSign;
+import org.bukkit.block.data.type.WallHangingSign;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -61,6 +63,7 @@ import org.shanerx.tradeshop.utils.debug.DebugLevels;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 
@@ -177,18 +180,7 @@ public class ShopProtectionListener implements Listener {
                 if (!Setting.findSetting(ShopType.getType((Sign) b.getState()).name() + "SHOP_EXPLODE".toUpperCase()).getBoolean()) {
                     i.remove();
 
-                    // The branch that used to stand here read the attached face off
-                    // org.bukkit.material.Sign, which only ever ran on a server
-                    // below 1.14 - the legacy switch is at 1.13, so it was already
-                    // unreachable on every version this plugin supports. Both the
-                    // class and BlockState.getData() are deprecated for removal.
-                    if (b.getType().toString().contains("WALL_SIGN")) {
-                        BlockData data = b.getBlockData();
-                        if (data instanceof Directional)
-                            toRemove.add(b.getRelative(((Directional) data).getFacing().getOppositeFace()));
-                    } else {
-                        toRemove.add(b.getRelative(BlockFace.DOWN));
-                    }
+                    toRemove.addAll(supportingBlocks(b));
                 } else {
                     Shop shop = Shop.loadShop((Sign) b.getState());
                     if (shop != null) {
@@ -199,6 +191,80 @@ public class ShopProtectionListener implements Listener {
         }
 
         event.blockList().removeAll(toRemove);
+    }
+
+    /**
+     * The blocks a shop sign is held up by, and which an explosion must
+     * therefore be kept away from: destroying one of them pops the sign off as
+     * an item and the shop is gone despite being protected.
+     *
+     * <p>Read off the sign's {@link BlockData}, which is the server describing
+     * its own block, so a mounting Minecraft adds later is answered correctly
+     * without an edit here. The test this replaces was
+     * {@code getType().toString().contains("WALL_SIGN")}, and
+     * {@code "OAK_WALL_HANGING_SIGN".contains("WALL_SIGN")} is <em>false</em> -
+     * the substring is {@code WALL_HANGING_SIGN} - so every wall-hanging sign
+     * fell through to the block below it and the explosion was let through at
+     * the wall that was actually holding it up.
+     *
+     * <p>Order matters: {@link WallHangingSign} is also {@link Directional}, so
+     * it has to be asked about first or it answers as an ordinary wall sign.
+     *
+     * <p>BKCommonLib's {@code BlockUtil.getAttachedBlock} is not used here, and
+     * that is a departure from the plan this change came from.
+     * {@code BlockData.getAttachedFace()} resolves through
+     * {@code org.bukkit.material.Attachable} - the pre-1.13 {@code MaterialData}
+     * bridge - and returns {@link BlockFace#DOWN} for anything with no legacy
+     * equivalent. Wall-hanging signs have none, so the library gives exactly the
+     * wrong answer this method exists to fix.
+     *
+     * <p>Public and static so that it can be asserted on its own. The end-to-end
+     * route to it is an {@code EntityExplodeEvent}, whose constructor is not
+     * stable across the versions this plugin is built against and run on; the
+     * decision this method makes is the whole of what the defect was, and a test
+     * that names it is worth more than one that has to build an explosion first.
+     */
+    public static List<Block> supportingBlocks(Block signBlock) {
+        BlockData data = signBlock.getBlockData();
+
+        if (data instanceof WallHangingSign) {
+            // A wall hanging sign spans two blocks and survives on either, so
+            // both are load-bearing and both are protected. Its facing is the
+            // way the text points, which is across the bar it hangs from.
+            BlockFace facing = ((WallHangingSign) data).getFacing();
+            return Arrays.asList(signBlock.getRelative(rotateClockwise(facing)),
+                    signBlock.getRelative(rotateClockwise(facing.getOppositeFace())));
+        }
+
+        if (data instanceof HangingSign) {
+            return Collections.singletonList(signBlock.getRelative(BlockFace.UP));
+        }
+
+        if (data instanceof Directional) {
+            return Collections.singletonList(
+                    signBlock.getRelative(((Directional) data).getFacing().getOppositeFace()));
+        }
+
+        return Collections.singletonList(signBlock.getRelative(BlockFace.DOWN));
+    }
+
+    /**
+     * The next cardinal face clockwise, which Bukkit's {@link BlockFace} does
+     * not provide.
+     */
+    private static BlockFace rotateClockwise(BlockFace face) {
+        switch (face) {
+            case NORTH:
+                return BlockFace.EAST;
+            case EAST:
+                return BlockFace.SOUTH;
+            case SOUTH:
+                return BlockFace.WEST;
+            case WEST:
+                return BlockFace.NORTH;
+            default:
+                return face;
+        }
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)

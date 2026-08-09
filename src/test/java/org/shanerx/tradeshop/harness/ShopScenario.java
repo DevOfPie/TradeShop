@@ -69,6 +69,17 @@ public abstract class ShopScenario {
         owner = addOperator("owner" + scenario);
     }
 
+    /**
+     * Swaps the sign for another of the server's sign materials.
+     *
+     * <p>Called before {@link #createShop}, so that a scenario can ask whether a
+     * wood or a mounting the plugin has never been given a line of its own is
+     * still recognised as somewhere a shop can go.
+     */
+    protected void useSignMaterial(Material signMaterial) {
+        signBlock.setType(signMaterial);
+    }
+
     /** Line 1 is the product the shop gives, line 2 the cost it takes. */
     protected void createShop(String product, String cost) {
         SignChangeEvent event = new SignChangeEvent(signBlock, owner,
