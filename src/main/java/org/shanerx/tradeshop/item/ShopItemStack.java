@@ -302,7 +302,23 @@ public class ShopItemStack implements Cloneable {
         BookMeta itemStackBookMeta = itemStack.hasItemMeta() && itemStack.getItemMeta() instanceof BookMeta ? ((BookMeta) itemStackMeta) : null,
                 toCompareBookMeta = toCompare.hasItemMeta() && toCompare.getItemMeta() instanceof BookMeta ? ((BookMeta) toCompareMeta) : null;
 
-        boolean useMeta = itemStack.hasItemMeta() == toCompare.hasItemMeta() && itemStack.hasItemMeta(),
+        // useMeta gates seven of the fifteen checks below - durability, enchantments,
+        // lore, custom model data, item flags, unbreakable and attribute modifiers - so
+        // what it is computed from decides whether they run at all.
+        //
+        // It used to be `hasItemMeta() == hasItemMeta() && hasItemMeta()`, false whenever
+        // the two sides DISAGREED about carrying metadata. That is exactly the pair those
+        // seven checks exist to separate: a buyer holding a plain item of the right
+        // material skipped all seven and only the display-name check still ran, so a shop
+        // asking for a Sharpness V sword paid out for a bare one.
+        //
+        // The condition it should always have been is "is there a meta on each side to
+        // read". A plain item's meta is present and blank - no enchants, no lore, not
+        // unbreakable, zero damage, no flags - so each of the seven now compares a real
+        // value against a blank one and answers on the merits. Two plain items still
+        // match: blank against blank is equal. getItemMeta() is null only for AIR, and a
+        // differing Material has already returned false above.
+        boolean useMeta = itemStackMeta != null && toCompareMeta != null,
                 useBookMeta = itemStackBookMeta != null && toCompareBookMeta != null;
 
         debugger.log("itemstack useMeta: " + useMeta, DebugLevels.ITEM_COMPARE);
