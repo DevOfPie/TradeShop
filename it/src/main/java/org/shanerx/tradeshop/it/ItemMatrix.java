@@ -16,6 +16,7 @@
 
 package org.shanerx.tradeshop.it;
 
+import de.leonhard.storage.Json;
 import org.bukkit.Color;
 import org.bukkit.FireworkEffect;
 import org.bukkit.Material;
@@ -39,6 +40,7 @@ import org.shanerx.tradeshop.data.storage.DataStorage;
 import org.shanerx.tradeshop.data.storage.DataType;
 import org.shanerx.tradeshop.item.ShopItemSide;
 import org.shanerx.tradeshop.item.ShopItemStack;
+import org.shanerx.tradeshop.item.ShopItemStackSettingKeys;
 import org.shanerx.tradeshop.shop.Shop;
 import org.shanerx.tradeshop.shop.ShopStatus;
 import org.shanerx.tradeshop.shoplocation.ShopLocation;
@@ -47,6 +49,11 @@ import org.shanerx.tradeshop.utils.simplix.serializers.ConfSerSerializer;
 import org.yaml.snakeyaml.external.biz.base64Coder.Base64Coder;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -372,6 +379,94 @@ final class ItemMatrix {
             Assert.that(fromJson.hasItemMeta(), "the metadata should survive the JSON encoding");
             Assert.equal("Kingsblade", fromJson.getItemMeta().getDisplayName(),
                     "the display name should survive the JSON encoding");
+        }));
+
+        // ------------------------------------------------------------------
+        // A shop file written before data components existed, loaded off disk by
+        // the storage that has to keep reading it.
+        //
+        // The fixture is a real artefact, not a hand-written approximation: a
+        // 1.20.4-era chunk file whose item carries its metadata as a nested "meta"
+        // map. ConfSerSerializer.toMap flattens such a map and drops Bukkit's "=="
+        // type key, and ItemStack.deserialize applies "meta" only when it is
+        // already an instanceof ItemMeta - so before the reader was taught to
+        // rebuild it, this sword came back stripped of its enchantment, its name
+        // and its lore, and the shop quietly started selling a plain sword.
+        // ------------------------------------------------------------------
+
+        rows.add(new IntegrationPlugin.Scenario("aPreComponentShopFileKeepsItsItemMetadata", () -> {
+            File legacy = new File(plugin.getDataFolder(), "legacy-shop-pre-components.json");
+            Assert.that(legacy.getParentFile().isDirectory() || legacy.getParentFile().mkdirs(),
+                    "the harness should have a folder to drop the legacy fixture into");
+
+            try (InputStream fixture = plugin.getResource("legacy/shop-pre-components.json")) {
+                Assert.that(fixture != null, "the legacy fixture should be on the harness classpath");
+                Files.copy(fixture, legacy.toPath(), StandardCopyOption.REPLACE_EXISTING);
+            } catch (IOException e) {
+                throw new AssertionError("could not place the legacy fixture this row is about: " + e, e);
+            }
+
+            // Read with the storage layer the plugin reads shop files with, then
+            // through the item reader the plugin loads stored items with. Nothing here
+            // stands in for either: Json is what JsonShopData extends, and
+            // ShopItemStack.deserialize(Map) is the exact call Shop.deserialize makes
+            // for every item on every side of every shop.
+            //
+            // The shop is read at item level rather than through DataStorage on
+            // purpose. Shop's constructor runs fixAfterLoad() before deserialize has
+            // filled in chestLoc, so a Shop-level load asserts the state of the world
+            // around 0,1,0 as much as it asserts the migration - and the Shop-level
+            // path is already covered, on a file this server wrote itself, by
+            // aShopWithAComplexItemSurvivesASaveAndReload above.
+            Json stored = new Json(legacy);
+            String shopKey = "l::world::0::1::0";
+            Assert.that(stored.singleLayerKeySet().contains(shopKey),
+                    "the fixture should hold the shop it was captured from, keys were "
+                            + stored.singleLayerKeySet());
+
+            List<Map<String, Object>> product = stored.getListParameterized(shopKey + ".product");
+            Assert.equal(1, product.size(), "the legacy product side should hold exactly one item");
+
+            ShopItemStack loadedProduct = ShopItemStack.deserialize(product.get(0));
+            Assert.that(loadedProduct != null, "the legacy product item should be readable at all");
+
+            ItemStack sword = loadedProduct.getItemStack();
+            Assert.that(sword != null, "the legacy product item should come back from disk at all");
+            Assert.equal(Material.DIAMOND_SWORD, sword.getType(),
+                    "the legacy product material should survive the load");
+            Assert.that(sword.hasItemMeta(),
+                    "the legacy item's metadata should survive the load. It is stored as a nested "
+                            + "\"meta\" map with no Bukkit '==' key, and ItemStack.deserialize skips "
+                            + "anything failing instanceof ItemMeta - so without rebuilding it first "
+                            + "the sword arrives bare");
+
+            ItemMeta meta = sword.getItemMeta();
+            Assert.equal(3, meta.getEnchantLevel(Enchantment.SHARPNESS),
+                    "the enchantment a pre-component file stored as DAMAGE_ALL:3 should survive the load");
+            Assert.that(meta.hasDisplayName(), "the legacy item should still have a display name");
+            Assert.that(meta.getDisplayName().contains("Migration Blade"),
+                    "the name the shop advertises should survive the load, was " + meta.getDisplayName());
+            Assert.that(meta.hasLore(), "the legacy item should still have lore");
+            Assert.equal(2, meta.getLore().size(), "both lore lines should survive the load");
+            Assert.that(meta.getLore().get(0).contains("forged before 1.20.5"),
+                    "the first lore line should survive the load, was " + meta.getLore().get(0));
+            Assert.that(meta.getLore().get(1).contains("data components did not exist"),
+                    "the second lore line should survive the load, was " + meta.getLore().get(1));
+
+            // The per-item settings are stored under their config names -
+            // "compare-name", not COMPARE_NAME - and the reader used to hand them
+            // straight to valueOf. Reading them at all is part of the migration.
+            Assert.that(loadedProduct.getShopSetting(ShopItemStackSettingKeys.COMPARE_ENCHANTMENTS).asBoolean(),
+                    "the legacy item's per-item settings should be read back under their config names");
+
+            // The cost side carries no metadata at all, and has to survive the same
+            // read: a migration that only works on decorated items is not a migration.
+            List<Map<String, Object>> cost = stored.getListParameterized(shopKey + ".cost");
+            Assert.equal(1, cost.size(), "the legacy cost side should hold exactly one item");
+            ItemStack emeralds = ShopItemStack.deserialize(cost.get(0)).getItemStack();
+            Assert.equal(Material.EMERALD, emeralds.getType(),
+                    "the legacy cost material should survive the load");
+            Assert.equal(3, emeralds.getAmount(), "the legacy cost amount should survive the load");
         }));
 
         // ------------------------------------------------------------------
