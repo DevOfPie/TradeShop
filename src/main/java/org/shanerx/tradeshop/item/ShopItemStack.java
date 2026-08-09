@@ -187,8 +187,25 @@ public class ShopItemStack implements Cloneable {
 
     public static ShopItemStack deserialize(FlatFileSection serialized) {
         Map<String, Object> asMap = new HashMap<>();
+
+        // The nested values are read with the typed getters on purpose: a raw get()
+        // answers the storage layer's own node type rather than a java.util.Map, and
+        // only the typed getters convert it.
         for (String key : serialized.singleLayerKeySet()) {
-            asMap.put(key, serialized.get(key));
+            switch (key) {
+                case "itemStackString":
+                    asMap.put(key, serialized.get(key) instanceof String ?
+                            serialized.getString(key) :
+                            serialized.getMapParameterized(key));
+                    break;
+                case "itemSettings":
+                case "shopSettings":
+                    asMap.put(key, serialized.getMapParameterized(key));
+                    break;
+                default:
+                    asMap.put(key, serialized.get(key));
+                    break;
+            }
         }
 
         return deserialize(asMap);

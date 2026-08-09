@@ -268,10 +268,13 @@ public class Shop {
                     break;
                 case "chestLoc":
                     // Written as a nested object today and as a location string by older
-                    // builds, so both are read.
-                    shop.chestLoc = data.get(key) instanceof Map ?
-                            ShopLocation.deserialize(data.getMapParameterized(key)) :
-                            ShopLocation.deserialize(data.get(key).toString());
+                    // builds, so both are read. The object form goes through
+                    // getMapParameterized rather than a cast of get(): the raw get()
+                    // hands back the storage layer's own node type, which is not a
+                    // java.util.Map, and only the typed getters convert it.
+                    shop.chestLoc = data.get(key) instanceof String ?
+                            ShopLocation.deserialize(data.get(key).toString()) :
+                            ShopLocation.deserialize(data.getMapParameterized(key));
                     break;
                 case "status":
                     shop.status = ShopStatus.valueOf(data.get(key).toString());
