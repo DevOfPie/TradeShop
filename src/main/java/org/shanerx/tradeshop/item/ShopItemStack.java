@@ -186,26 +186,68 @@ public class ShopItemStack implements Cloneable {
     }
 
     public static ShopItemStack deserialize(FlatFileSection serialized) {
+        Map<String, Object> asMap = new HashMap<>();
+        for (String key : serialized.singleLayerKeySet()) {
+            asMap.put(key, serialized.get(key));
+        }
+
+        return deserialize(asMap);
+    }
+
+    /**
+     * Reads one stored item back, in any of the three encodings a shop file can hold.
+     *
+     * <p>All three are still read and only the current one is ever written:
+     * <ul>
+     *   <li>{@code itemStackB64} - the oldest, a Bukkit object stream in base64</li>
+     *   <li>{@code itemStackString} as a JSON <em>string</em></li>
+     *   <li>{@code itemStackString} as a <em>map</em>, which is what is written today,
+     *       in both the modern component shape and the pre-1.20.5 nested-{@code meta}
+     *       shape</li>
+     * </ul>
+     *
+     * @param serialized one item's stored map
+     * @return the item, or null if none of the encodings yielded one
+     */
+    public static ShopItemStack deserialize(Map<String, Object> serialized) {
         ShopItemStackBuilder item = new ShopItemStackBuilder();
 
         Map<ShopItemStackSettingKeys, ObjectHolder<?>> settings = new HashMap<>();
 
-        for (String key : serialized.keySet()) {
+        serialized.forEach((key, value) -> {
+            if (value == null) return;
+
             switch (key) {
                 case "itemStackString":
-                    item.setItemStack(ConfSerSerializer.deserializeItemStack(serialized.getMapParameterized(key)));
+                    // A map is the current encoding; a bare String is the older JSON one.
+                    if (value instanceof Map) {
+                        item.setItemStack(ConfSerSerializer.deserializeItemStack((Map<String, Object>) value));
+                    } else {
+                        item.setItemStackString(value.toString());
+                    }
                     break;
                 case "itemSettings":
                 case "shopSettings":
-                    Map<String, Map<String, Object>> temp = serialized.getMapParameterized(key);
-                    temp.forEach((k, v) -> settings.put(ShopItemStackSettingKeys.valueOf(k), ObjectHolder.deserialize(v)));
+                    // match(), not valueOf(): what is on disk is the config name -
+                    // "compare-name" - and valueOf would throw on every one of them.
+                    ((Map<String, Object>) value).forEach((k, v) -> {
+                        try {
+                            settings.put(ShopItemStackSettingKeys.match(k),
+                                    v instanceof Map ?
+                                            ObjectHolder.deserialize((Map<String, Object>) v) :
+                                            new ObjectHolder<>(v));
+                        } catch (IllegalArgumentException unknownSetting) {
+                            // A per-item setting this build no longer has. Dropping one
+                            // setting must not cost the shop owner the whole item.
+                        }
+                    });
                     item.setItemSettings(settings);
                     break;
                 case "itemStackB64":
-                    item.setItemStackB64(serialized.getString(key));
+                    item.setItemStackB64(value.toString());
                     break;
             }
-        }
+        });
 
         return item.build();
     }

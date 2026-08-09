@@ -242,7 +242,13 @@ public class Shop {
 
         StringBuilder dataRemaining = new StringBuilder();
 
-        for (String key : data.keySet()) {
+        // singleLayerKeySet, NOT keySet. FlatFileSection.keySet() is the DEEP key set:
+        // a shop whose file holds a nested "chestLoc" object answers "chestLoc.world",
+        // "chestLoc.x", "chestLoc.y"... and never the bare "chestLoc" this switch is
+        // written against. Every branch below whose value is an object or a list was
+        // therefore dead, and the shop came back with no chest location, no settings and
+        // - the one that costs a shop owner their items - an empty product and cost side.
+        for (String key : data.singleLayerKeySet()) {
             switch (key) {
                 case "shopLoc":
                 case "shopType":
@@ -255,20 +261,23 @@ public class Shop {
                     shop.members = new HashSet<>(data.getSerializableList(key, UUID.class));
                     break;
                 case "product":
-                    data.keySet(key).forEach((itmKey) -> shop.addSideItem(ShopItemSide.PRODUCT, ShopItemStack.deserialize(data.getSection(itmKey))));
+                    deserializeSide(data, key).forEach((itm) -> shop.addSideItem(ShopItemSide.PRODUCT, itm));
                     break;
                 case "cost":
-                    data.keySet(key).forEach((itmKey) -> shop.addSideItem(ShopItemSide.COST, ShopItemStack.deserialize(data.getSection(itmKey))));
+                    deserializeSide(data, key).forEach((itm) -> shop.addSideItem(ShopItemSide.COST, itm));
                     break;
                 case "chestLoc":
-                    shop.chestLoc = ShopLocation.deserialize(data.get(key).toString());
+                    // Written as a nested object today and as a location string by older
+                    // builds, so both are read.
+                    shop.chestLoc = data.get(key) instanceof Map ?
+                            ShopLocation.deserialize(data.getMapParameterized(key)) :
+                            ShopLocation.deserialize(data.get(key).toString());
                     break;
                 case "status":
                     shop.status = ShopStatus.valueOf(data.get(key).toString());
                     break;
                 case "shopSettings":
-                    shop.shopSettings = data.getMapParameterized(key);
-                    data.remove(key);
+                    shop.shopSettings = deserializeShopSettings(data.getMapParameterized(key));
                     break;
                 case "availableTrades":
                     shop.availableTrades = (int) data.get(key);
@@ -284,6 +293,52 @@ public class Shop {
         }
 
         return shop;
+    }
+
+    /**
+     * Reads one side of a shop - the product list or the cost list - out of its file.
+     *
+     * <p>{@code serialize()} writes each side as a JSON list of item maps, so the side
+     * is read as a list of maps. It used to be walked with
+     * {@code data.keySet(key).forEach(...)}, which enumerates keys underneath a
+     * <em>section</em> and answers nothing at all for a list, so every reloaded shop
+     * came back with zero items on both sides.
+     */
+    private static List<ShopItemStack> deserializeSide(FlatFileSection data, String key) {
+        List<ShopItemStack> items = new ArrayList<>();
+
+        for (Map<String, Object> serializedItem : data.<Map<String, Object>>getListParameterized(key)) {
+            ShopItemStack item = ShopItemStack.deserialize(serializedItem);
+            if (item != null) items.add(item);
+        }
+
+        return items;
+    }
+
+    /**
+     * Turns the stored {@code shopSettings} object back into the typed map the field holds.
+     *
+     * <p>The keys on disk are config names - {@code hopper-export} - and the values are
+     * whatever {@link ObjectHolder} wrote. Assigning the raw map straight onto the field,
+     * as this branch used to, left it keyed by String and made the next
+     * {@code serialize()} throw. Any key this build no longer knows is dropped rather
+     * than failing the whole load, and {@code aFixup()} fills in whatever is missing.
+     */
+    private static Map<ShopSettingKeys, ObjectHolder<?>> deserializeShopSettings(Map<String, Object> stored) {
+        Map<ShopSettingKeys, ObjectHolder<?>> settings = new HashMap<>();
+
+        stored.forEach((name, value) -> {
+            try {
+                settings.put(ShopSettingKeys.findShopSetting(name),
+                        value instanceof Map ?
+                                ObjectHolder.deserialize((Map<String, Object>) value) :
+                                new ObjectHolder<>(value));
+            } catch (IllegalArgumentException unknownSetting) {
+                TradeShop.getPlugin().getVarManager().getDebugger().log("Unknown shop setting '" + name + "' skipped while loading a shop.", DebugLevels.DATA_ERROR);
+            }
+        });
+
+        return settings;
     }
 
     /**
