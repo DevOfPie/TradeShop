@@ -48,10 +48,23 @@ set -eu
 # the cross-version matrix is a separate piece of work and building it here
 # would take scope from it.
 # ---------------------------------------------------------------------------
-PAPER_PROJECT=paper
-PAPER_VERSION=1.21.11
-PAPER_BUILD=132
-PAPER_SHA256=5ffef465eeeb5f2a3c23a24419d97c51afd7dbb4923ff42df9a3f58bba1ccfba
+#
+# The three pin values and the JVM the SERVER runs on are overridable from the
+# environment so that the same harness can be pointed at a second Paper without
+# the pin being edited and forgotten in that state. CI sets none of them and
+# therefore runs exactly the pinned combination below. Overriding one of the
+# three means overriding all three: a version, a build and the checksum that
+# build publishes belong together, and the download is still verified against
+# whatever PAPER_SHA256 says.
+PAPER_PROJECT=${PAPER_PROJECT:-paper}
+PAPER_VERSION=${PAPER_VERSION:-1.21.11}
+PAPER_BUILD=${PAPER_BUILD:-132}
+PAPER_SHA256=${PAPER_SHA256:-5ffef465eeeb5f2a3c23a24419d97c51afd7dbb4923ff42df9a3f58bba1ccfba}
+
+# The JVM the server runs under, which is NOT the one this repository builds
+# with: the plugin and the tests target 21, and a newer Paper may require a
+# newer runtime. Only the server process is affected.
+JAVA_BIN=${TS_IT_JAVA:-java}
 
 # TradeShop cannot enable without BKCommonLib: Setting.<clinit> reaches
 # com/bergerkiller/bukkit/common/config/JsonSerializer and dies with
@@ -288,6 +301,7 @@ PROPS
 
 boot_and_wait() {
     say "booting Paper ${PAPER_VERSION} build ${PAPER_BUILD} on ${BIND_ADDRESS}:${BIND_PORT}"
+    say "server JVM: $("$JAVA_BIN" -version 2>&1 | head -1)"
     started=$(date +%s)
 
     # stdin from /dev/null: a --nogui server whose stdin is a closed terminal
@@ -295,7 +309,7 @@ boot_and_wait() {
     # has written its result, so nothing needs to type "stop".
     (
         cd "$SERVER" &&
-        exec java -Xms512M -Xmx1G -XX:+UseG1GC \
+        exec "$JAVA_BIN" -Xms512M -Xmx1G -XX:+UseG1GC \
             ${TS_IT_INDUCE:+-Dtradeshop.it.induce=$TS_IT_INDUCE} \
             -Dtradeshop.it.marker="$MARKER" \
             -Dtradeshop.it.client=true \
