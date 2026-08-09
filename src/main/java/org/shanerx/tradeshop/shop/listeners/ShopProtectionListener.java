@@ -177,10 +177,12 @@ public class ShopProtectionListener implements Listener {
                 if (!Setting.findSetting(ShopType.getType((Sign) b.getState()).name() + "SHOP_EXPLODE".toUpperCase()).getBoolean()) {
                     i.remove();
 
-                    if (plugin.getVersion().isBelow(1, 14)) {
-                        org.bukkit.material.Sign s = (org.bukkit.material.Sign) b.getState().getData();
-                        toRemove.add(b.getRelative(s.getAttachedFace()));
-                    } else if (b.getType().toString().contains("WALL_SIGN")) {
+                    // The branch that used to stand here read the attached face off
+                    // org.bukkit.material.Sign, which only ever ran on a server
+                    // below 1.14 - the legacy switch is at 1.13, so it was already
+                    // unreachable on every version this plugin supports. Both the
+                    // class and BlockState.getData() are deprecated for removal.
+                    if (b.getType().toString().contains("WALL_SIGN")) {
                         BlockData data = b.getBlockData();
                         if (data instanceof Directional)
                             toRemove.add(b.getRelative(((Directional) data).getFacing().getOppositeFace()));

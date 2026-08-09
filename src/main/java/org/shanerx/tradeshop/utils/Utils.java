@@ -38,7 +38,6 @@ import org.bukkit.event.block.SignChangeEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
-import org.bukkit.material.MaterialData;
 import org.bukkit.plugin.PluginDescriptionFile;
 import org.shanerx.tradeshop.TradeShop;
 import org.shanerx.tradeshop.data.config.Message;
@@ -148,19 +147,22 @@ public class Utils {
     public boolean itemCheck(ItemStack itm1, ItemStack itm2) {
         int i1 = itm1.getAmount(), i2 = itm2.getAmount();
         ItemMeta temp1 = itm1.getItemMeta();
-        MaterialData temp11 = itm1.getData();
         boolean ret;
         itm1.setAmount(1);
         itm2.setAmount(1);
 
+        // The MaterialData that used to be saved, copied and restored alongside
+        // the meta here carried exactly one thing on a 1.13+ server - the
+        // durability byte - and durability has lived in ItemMeta as Damageable
+        // since the flattening, so setItemMeta already moves it. The pair was
+        // redundant, and org.bukkit.material.MaterialData together with
+        // ItemStack.getData()/setData() is deprecated for removal.
         if (!itm1.hasItemMeta() && itm2.hasItemMeta()) {
             itm1.setItemMeta(itm2.getItemMeta());
-            itm1.setData(itm2.getData());
         }
         ret = itm1.equals(itm2);
 
         itm1.setItemMeta(temp1);
-        itm1.setData(temp11);
         itm1.setAmount(i1);
         itm2.setAmount(i2);
         return ret;
