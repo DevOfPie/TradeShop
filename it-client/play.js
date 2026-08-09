@@ -364,6 +364,32 @@ async function play () {
 
   await step(owner, 'theWhatGuiShowsWhatTheShopTrades')
 
+  // ---- A complex item, out of a real hand and back onto a real screen. -----
+  //
+  // The only row of the item-metadata matrix that belongs at this tier. The
+  // sword the harness handed over at join has a name, a lore line and an
+  // enchantment on it; holding it and typing /tradeshop setProduct is the path
+  // an item takes through the network codec into the shop, and the what screen
+  // afterwards is it coming back out as something a client can be shown.
+  await hold(owner, 'diamond_sword')
+  await face(owner, signPos)
+  say('typing /tradeshop setProduct while holding',
+    owner.heldItem ? owner.heldItem.name : 'nothing')
+  owner.chat('/tradeshop setProduct')
+  await owner.waitForTicks(10)
+
+  opening = nextWindow(owner, 'the what screen, a second time')
+  owner.chat('/tradeshop what')
+  await opening
+
+  opening = nextWindow(owner, 'the view of the complex product item')
+  await clickIcon(owner, 'diamond_sword', 'the complex product item')
+  await opening
+  owner.closeWindow(owner.currentWindow)
+  await owner.waitForTicks(5)
+
+  await step(owner, 'aHeldComplexItemBecomesTheProductAndRenders')
+
   return owner
 }
 
@@ -408,7 +434,14 @@ play().then(async (owner) => {
   // timeout that says nothing about why.
   const owner = sessions.find((b) => b.username === OWNER && !b.harness.ended)
   if (owner) {
-    await release(owner, (e instanceof Failed ? e.message : String(e)).replace(/\s+/g, ' ').slice(0, 300))
+    // 180, not 300. MEASURED: a `/itstep finish <reason>` longer than the
+    // server's command limit is dropped with
+    // "Failed to decode packet 'serverbound/minecraft:chat_command'", the
+    // connection is closed, the harness is never told to finish, and the run
+    // costs its whole client deadline before reporting anything. A truncated
+    // reason is worth more than a lost one - the scenarios say what happened,
+    // this only says why the client stopped.
+    await release(owner, (e instanceof Failed ? e.message : String(e)).replace(/\s+/g, ' ').slice(0, 180))
   }
   process.exit(1)
 })

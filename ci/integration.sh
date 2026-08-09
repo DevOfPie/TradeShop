@@ -48,10 +48,23 @@ set -eu
 # the cross-version matrix is a separate piece of work and building it here
 # would take scope from it.
 # ---------------------------------------------------------------------------
-PAPER_PROJECT=paper
-PAPER_VERSION=1.21.11
-PAPER_BUILD=132
-PAPER_SHA256=5ffef465eeeb5f2a3c23a24419d97c51afd7dbb4923ff42df9a3f58bba1ccfba
+#
+# The three pin values and the JVM the SERVER runs on are overridable from the
+# environment so that the same harness can be pointed at a second Paper without
+# the pin being edited and forgotten in that state. CI sets none of them and
+# therefore runs exactly the pinned combination below. Overriding one of the
+# three means overriding all three: a version, a build and the checksum that
+# build publishes belong together, and the download is still verified against
+# whatever PAPER_SHA256 says.
+PAPER_PROJECT=${PAPER_PROJECT:-paper}
+PAPER_VERSION=${PAPER_VERSION:-1.21.11}
+PAPER_BUILD=${PAPER_BUILD:-132}
+PAPER_SHA256=${PAPER_SHA256:-5ffef465eeeb5f2a3c23a24419d97c51afd7dbb4923ff42df9a3f58bba1ccfba}
+
+# The JVM the server runs under, which is NOT the one this repository builds
+# with: the plugin and the tests target 21, and a newer Paper may require a
+# newer runtime. Only the server process is affected.
+JAVA_BIN=${TS_IT_JAVA:-java}
 
 # TradeShop cannot enable without BKCommonLib: Setting.<clinit> reaches
 # com/bergerkiller/bukkit/common/config/JsonSerializer and dies with
@@ -66,11 +79,18 @@ BKCL_URL=https://ci.mg-dev.eu/job/BKCommonLib/${BKCL_BUILD}/artifact/build/${BKC
 BKCL_SHA256=e7b15d76898834a0b7e8a080982a3f24c69b4a82e87a1e5ec29bce8d17045c46
 
 # A scenario that did not run is a failure, so the count is asserted here rather
-# than read out of the report the run itself produced. Six in-server scenarios
-# plus six driven by a real client; both halves declare themselves before they
-# run, and the plugin records every step the client never reached as a failure by
-# name rather than leaving the suite looking smaller.
-EXPECTED_SCENARIOS=12
+# than read out of the report the run itself produced. Twenty-two in-server
+# scenarios - six shop flows plus sixteen rows of the item-metadata matrix in
+# it/ItemMatrix.java - and seven driven by a real client; both halves declare
+# themselves before they run, and the plugin records every step the client never
+# reached as a failure by name rather than leaving the suite looking smaller.
+#
+# W4 phase 1 landed and this suite is expected to be GREEN. The matrix rows that
+# were written to fail - the useMeta gate, potions, one-sided firework effects,
+# the save-and-reload - all assert the behaviour a shop owner is entitled to and
+# now get it. The count went 28 -> 29 with the pre-component migration row, which
+# loads a real 1.20.4-era shop file off disk.
+EXPECTED_SCENARIOS=29
 
 # Tier 3. The client is not optional: a run that boots a server, plays nothing
 # and exits 0 is the vacuous pass this project treats as the worst possible
@@ -281,6 +301,7 @@ PROPS
 
 boot_and_wait() {
     say "booting Paper ${PAPER_VERSION} build ${PAPER_BUILD} on ${BIND_ADDRESS}:${BIND_PORT}"
+    say "server JVM: $("$JAVA_BIN" -version 2>&1 | head -1)"
     started=$(date +%s)
 
     # stdin from /dev/null: a --nogui server whose stdin is a closed terminal
@@ -288,7 +309,7 @@ boot_and_wait() {
     # has written its result, so nothing needs to type "stop".
     (
         cd "$SERVER" &&
-        exec java -Xms512M -Xmx1G -XX:+UseG1GC \
+        exec "$JAVA_BIN" -Xms512M -Xmx1G -XX:+UseG1GC \
             ${TS_IT_INDUCE:+-Dtradeshop.it.induce=$TS_IT_INDUCE} \
             -Dtradeshop.it.marker="$MARKER" \
             -Dtradeshop.it.client=true \
@@ -369,7 +390,15 @@ $(tail -n 40 "$CONSOLE")"
     # A severe line fails the run even when every assertion passed. onEnable
     # throwing while the server carries on is exactly the shape of failure a
     # harness that only checks its own assertions calls green.
-    severe=$(grep -nE '\[[0-9:]+ (ERROR|SEVERE|FATAL)\]|Exception|Error occurred while enabling|Could not load .plugin' "$CONSOLE" || true)
+    #
+    # The harness's own "FAIL <scenario>: <why>" lines are excluded, and only
+    # those. A scenario is allowed to fail - several are written to - and its
+    # message routinely names the exception it caught, which the pattern above
+    # would otherwise read as the server being broken. Nothing is hidden by this:
+    # every one of those lines is in the result file too, and check_results below
+    # fails the run on it by name.
+    severe=$(grep -nE '\[[0-9:]+ (ERROR|SEVERE|FATAL)\]|Exception|Error occurred while enabling|Could not load .plugin' "$CONSOLE" \
+        | grep -v '\[TradeShopIT\] FAIL ' || true)
     [ -z "$severe" ] || die "the console carries severe lines:
 $severe"
 

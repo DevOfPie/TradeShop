@@ -29,6 +29,7 @@ import org.bukkit.block.sign.Side;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
+import org.bukkit.enchantments.Enchantment;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -37,6 +38,7 @@ import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryOpenEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.ItemMeta;
 import org.shanerx.tradeshop.item.ShopItemSide;
 import org.shanerx.tradeshop.item.ShopItemStack;
 import org.shanerx.tradeshop.shop.Shop;
@@ -114,10 +116,28 @@ final class ClientPhase implements Listener, CommandExecutor {
             "aClientStockedShopReportsItselfOpen",
             "aRealPlayerSessionTradesWithTheShop",
             "theEditGuiOpensAndItsClicksReachTheShop",
-            "theWhatGuiShowsWhatTheShopTrades");
+            "theWhatGuiShowsWhatTheShopTrades",
+            // Last on purpose: it replaces the shop's product, so every step above
+            // it would be asserting a shop this one has already changed.
+            "aHeldComplexItemBecomesTheProductAndRenders");
 
     /** The step name that is not a step: it closes the run. */
     private static final String FINISH = "finish";
+
+    /** The complex item the owner bot is given, and the only one in this tier. */
+    private static final String PRODUCT_NAME = "Kingsblade";
+    private static final String PRODUCT_LORE = "Forged at the end of the world";
+    private static final ItemStack COMPLEX_PRODUCT = complexProduct();
+
+    private static ItemStack complexProduct() {
+        ItemStack sword = new ItemStack(Material.DIAMOND_SWORD, 1);
+        ItemMeta meta = sword.getItemMeta();
+        meta.setDisplayName(PRODUCT_NAME);
+        meta.setLore(List.of(PRODUCT_LORE));
+        meta.addEnchant(Enchantment.SHARPNESS, 3, true);
+        sword.setItemMeta(meta);
+        return sword;
+    }
 
     /**
      * A patch of world no tier-2 scenario has touched. Tier 2 uses x = 1000n for
@@ -293,6 +313,13 @@ final class ClientPhase implements Listener, CommandExecutor {
             player.getInventory().addItem(new ItemStack(Material.CHEST, 1));
             player.getInventory().addItem(new ItemStack(Material.OAK_SIGN, 1));
             player.getInventory().addItem(new ItemStack(Material.DIAMOND, 10));
+            // The one complex item in this tier. Handing it over is fixture, the
+            // same way the ten diamonds are; what is under test is that a client
+            // holding it and typing /tradeshop setProduct ends up with a shop that
+            // sells exactly this, and that the GUI can draw it. The attributes are
+            // chosen to be the ones the network item codec has to carry: a name, a
+            // lore line and an enchantment.
+            player.getInventory().addItem(COMPLEX_PRODUCT.clone());
         } else if (BUYER_BOT.equals(player.getName())) {
             // Two blocks south of the sign, looking north at it.
             where = new Location(chestBlock.getWorld(), SITE_X + 0.5, chestBlock.getY(), SITE_Z + 2.5, 0f, 0f);
@@ -461,6 +488,7 @@ final class ClientPhase implements Listener, CommandExecutor {
             case "aRealPlayerSessionTradesWithTheShop" -> aRealPlayerSessionTradesWithTheShop();
             case "theEditGuiOpensAndItsClicksReachTheShop" -> theEditGuiOpensAndItsClicksReachTheShop();
             case "theWhatGuiShowsWhatTheShopTrades" -> theWhatGuiShowsWhatTheShopTrades();
+            case "aHeldComplexItemBecomesTheProductAndRenders" -> aHeldComplexItemBecomesTheProductAndRenders();
             default -> throw new AssertionError("no body is written for declared step " + name);
         }
     }
@@ -620,6 +648,68 @@ final class ClientPhase implements Listener, CommandExecutor {
                         + "and not Edit; the server opened " + openedTitles);
         Assert.that(openedTitles.indexOf("View Product Item") > openedTitles.indexOf(title),
                 "the item view must open after the what screen it is reached from");
+    }
+
+    /**
+     * The one row of the item-metadata matrix that belongs at this tier.
+     *
+     * <p>Everything about the comparator is settled at tiers 1 and 2, and repeating
+     * it here would buy nothing. What only exists here is the <b>path</b>: an item
+     * with a name, a lore line and an enchantment travels from a real client's hand,
+     * through the network item codec, into {@code ShopItemSubCommand.setSide}'s
+     * {@code getItemInMainHand().clone()}, into the shop - and then back out through
+     * {@code inventorygui} as an icon a client can be shown. Nothing below this tier
+     * has a hand to hold an item in, or a screen to draw it on.
+     *
+     * <p>The GUI half is asserted from the windows the <em>server</em> opened, not
+     * from anything the bot says: {@code inventorygui} only opens its next screen
+     * from inside a click handler, so a second "View Product Item" in the trail is
+     * proof that a real click packet reached the handler while this item was the
+     * product.
+     */
+    private void aHeldComplexItemBecomesTheProductAndRenders() {
+        Shop shop = shop();
+        Assert.that(shop != null, "the shop should still be loadable");
+
+        List<ShopItemStack> product = shop.getSideList(ShopItemSide.PRODUCT);
+        Assert.equal(1, product.size(), "the product side should hold exactly one item");
+
+        ItemStack held = product.get(0).getItemStack();
+        Assert.equal(Material.DIAMOND_SWORD, held.getType(),
+                "/tradeshop setProduct with no arguments takes the item in the client's hand");
+        Assert.that(held.hasItemMeta(),
+                "the metadata should have survived the trip from the client's hand into the shop");
+        Assert.equal(PRODUCT_NAME, held.getItemMeta().getDisplayName(),
+                "the display name should have survived the trip from the client's hand");
+        Assert.equal(List.of(PRODUCT_LORE), held.getItemMeta().getLore(),
+                "the lore should have survived the trip from the client's hand");
+        Assert.equal(3, held.getItemMeta().getEnchantLevel(Enchantment.SHARPNESS),
+                "the enchantment should have survived the trip from the client's hand");
+
+        // And the GUI drew it. Both titles are already in the trail once, from
+        // theWhatGuiShowsWhatTheShopTrades, so it is the SECOND "View Product Item"
+        // that belongs to this step. The shop's own title is NOT counted: closing
+        // the item view runs InventoryGui.goBack and reopens it, so it appears
+        // twice per visit rather than once - measured, not assumed.
+        String title = OWNER_BOT + "'s Shop";
+        Assert.that(openedTitles.contains(title),
+                "/tradeshop what should have opened the shop's window; the server opened " + openedTitles);
+        Assert.equal(2, occurrences("View Product Item"),
+                "clicking the product a second time should have opened it read-only again; the server "
+                        + "opened " + openedTitles);
+        Assert.that(openedTitles.lastIndexOf("View Product Item") > openedTitles.indexOf(title),
+                "the item view must open after the what screen it is reached from");
+
+        // The strongest assertion of the three, and the one that ties the GUI to
+        // THIS item: the icon the client found and clicked was a diamond sword,
+        // which it only can be if the shop's product is now the sword and the
+        // server drew it into the window.
+        Assert.that(clicks.stream().anyMatch(c -> c.contains(OWNER_BOT) && c.contains("DIAMOND_SWORD")),
+                "the product icon is now the sword and the client clicked it; clicks were " + clicks);
+    }
+
+    private int occurrences(String title) {
+        return (int) openedTitles.stream().filter(title::equals).count();
     }
 
     // ------------------------------------------------------------------

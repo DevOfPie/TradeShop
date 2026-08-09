@@ -27,6 +27,8 @@ package org.shanerx.tradeshop.data.storage;
 
 import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
+import de.leonhard.storage.shaded.json.JSONException;
+import de.leonhard.storage.shaded.json.JSONObject;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.FilenameUtils;
 import org.apache.commons.lang.NotImplementedException;
@@ -64,6 +66,15 @@ import java.util.stream.Collectors;
 public class DataStorage {
 
     private transient DataType dataType;
+
+    /**
+     * Where a file with junk appended after a complete shop object is cut.
+     *
+     * <p>Only ever applied to a file that has already been shown NOT to parse, and
+     * only kept if the cut produces something that does. On its own this pattern
+     * cannot tell a broken file from a sound one: a '}' followed by more content is
+     * ordinary inside an item's data components, which embed JSON in a JSON string.
+     */
     private final String BROKEN_JSON_START = "}(.*[\"\\w:])";
 
     private final Cache<World, LinkageConfiguration> linkCache = CacheBuilder.newBuilder()
@@ -112,12 +123,30 @@ public class DataStorage {
                 if (!list.isEmpty()) {
                     list.forEach((f) -> {
                         try {
-                            String fileStr = FileUtils.readFileToString(f, StandardCharsets.UTF_8),
-                                    correctedString = fileStr.split(BROKEN_JSON_START)[0];
-                            if (correctedString.length() < fileStr.length()) {
+                            String fileStr = FileUtils.readFileToString(f, StandardCharsets.UTF_8);
+
+                            // A file that parses is not broken, whatever it happens to
+                            // contain. This test has to come first and has to be a parse:
+                            // BROKEN_JSON_START looks for a '}' followed by more content,
+                            // and since item data components an item's own JSON is embedded
+                            // INSIDE a JSON string - "minecraft:custom_name":
+                            // "{extra:[\"Kingsblade\"],text:\"\"}" - so that shape is now
+                            // normal content. No regex can tell it apart from a real break;
+                            // only a parser can.
+                            if (parses(fileStr)) return;
+
+                            String correctedString = fileStr.split(BROKEN_JSON_START)[0];
+
+                            // Only rewrite when the repair actually produces a readable
+                            // file. The truncation used to be written back unconditionally,
+                            // which could leave a file just as broken as before with data
+                            // additionally cut off the end.
+                            if (correctedString.length() < fileStr.length() && parses(correctedString)) {
                                 correctedFiles.put(f, correctedString);
 
                                 TradeShop.getPlugin().getDebugger().log("Error found in file: " + f.getName() + "\n Text Removed: ---\n" + correctedString, DebugLevels.DATA_VERIFICATION);
+                            } else {
+                                TradeShop.getPlugin().getDebugger().log("File " + f.getName() + " is not readable JSON and could not be repaired; it has been left untouched rather than truncated.", DebugLevels.DATA_ERROR);
                             }
                         } catch (IOException e) {
                             correctedFiles.put(f, null);
@@ -172,6 +201,22 @@ public class DataStorage {
             return errFiles.size() < 1;
         }
         throw new NotImplementedException("Data storage type " + dataType + " has not been implemented yet.");
+    }
+
+    /**
+     * Whether {@code json} is a document the shop loader can actually read.
+     *
+     * <p>Deliberately the same parser the storage layer itself uses, so that a
+     * "yes" here means "the loader will accept this" rather than "some parser
+     * somewhere accepted it".
+     */
+    private boolean parses(String json) {
+        try {
+            new JSONObject(json);
+            return true;
+        } catch (JSONException e) {
+            return false;
+        }
     }
 
     public Shop loadShopFromSign(ShopLocation sign) {

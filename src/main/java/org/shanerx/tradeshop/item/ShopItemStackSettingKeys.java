@@ -53,7 +53,8 @@ public enum ShopItemStackSettingKeys {
     COMPARE_SHULKER_INVENTORY(new ItemStack(Material.CHEST_MINECART), true),
     COMPARE_BUNDLE_INVENTORY(new ItemStack(Material.CHEST_MINECART), true),
     COMPARE_FIREWORK_DURATION(new ItemStack(Material.GUNPOWDER), true),
-    COMPARE_FIREWORK_EFFECTS(new ItemStack(Material.FIREWORK_STAR), true);
+    COMPARE_FIREWORK_EFFECTS(new ItemStack(Material.FIREWORK_STAR), true),
+    COMPARE_POTION_EFFECTS(new ItemStack(Material.BREWING_STAND), true);
 
     private final ItemStack displayItem;
     private final Object preConfigDefault;
