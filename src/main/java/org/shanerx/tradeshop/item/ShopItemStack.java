@@ -531,6 +531,15 @@ public class ShopItemStack implements Cloneable {
             }
 
             if (getShopSetting(ShopItemStackSettingKeys.COMPARE_FIREWORK_EFFECTS).asBoolean()) {
+                // Return False if hasEffects differs (one has one doesn't). Without this the
+                // comparison below only ever ran when the SHOP's rocket carried effects, so a
+                // shop dealing in plain rockets was paid with decorated ones.
+                if (fireworkMeta.hasEffects() != toCompareFireworkMeta.hasEffects()) {
+                    debugger.log("itemstack hasEffects: " + fireworkMeta.hasEffects(), DebugLevels.ITEM_COMPARE);
+                    debugger.log("toCompare hasEffects: " + toCompareFireworkMeta.hasEffects(), DebugLevels.ITEM_COMPARE);
+                    return false;
+                }
+
                 if (fireworkMeta.hasEffects()) {
                     if (fireworkMeta.getEffects().size() != toCompareFireworkMeta.getEffects().size()) {
                         return false;
