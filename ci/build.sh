@@ -8,6 +8,17 @@
 # push. See ci/README.md for why the split exists.
 #
 # Run it locally the same way CI does: sh ci/build.sh
+#
+# WHILE THE ITEM-METADATA SUITE IS RED - which is the state W4 phase 0 leaves the
+# branch in, deliberately - this script stops at tier 1 and tiers 2 and 3 never
+# run. That is `set -e` doing its job and is not worked around here: a build step
+# that carries on past a failing one is how a red suite becomes a green build.
+# To exercise tiers 2 and 3 while tier 1 is still red:
+#
+#     mvn -B clean package -DskipTests && sh ci/integration.sh
+#
+# and read the result file it prints. Once phase 1 lands, this script is the
+# whole gate again.
 
 set -eu
 

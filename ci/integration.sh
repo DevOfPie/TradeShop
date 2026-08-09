@@ -66,11 +66,17 @@ BKCL_URL=https://ci.mg-dev.eu/job/BKCommonLib/${BKCL_BUILD}/artifact/build/${BKC
 BKCL_SHA256=e7b15d76898834a0b7e8a080982a3f24c69b4a82e87a1e5ec29bce8d17045c46
 
 # A scenario that did not run is a failure, so the count is asserted here rather
-# than read out of the report the run itself produced. Six in-server scenarios
-# plus six driven by a real client; both halves declare themselves before they
-# run, and the plugin records every step the client never reached as a failure by
-# name rather than leaving the suite looking smaller.
-EXPECTED_SCENARIOS=12
+# than read out of the report the run itself produced. Twenty-one in-server
+# scenarios - six shop flows plus fifteen rows of the item-metadata matrix in
+# it/ItemMatrix.java - and seven driven by a real client; both halves declare
+# themselves before they run, and the plugin records every step the client never
+# reached as a failure by name rather than leaving the suite looking smaller.
+#
+# THIS SUITE IS EXPECTED TO BE RED until W4 phase 1 lands. Several rows of the
+# matrix are written to fail: they assert the behaviour a shop owner is entitled
+# to and do not get it. A row here going green without a fix in src/main is the
+# thing to be suspicious of, not a row going red.
+EXPECTED_SCENARIOS=28
 
 # Tier 3. The client is not optional: a run that boots a server, plays nothing
 # and exits 0 is the vacuous pass this project treats as the worst possible
@@ -369,7 +375,15 @@ $(tail -n 40 "$CONSOLE")"
     # A severe line fails the run even when every assertion passed. onEnable
     # throwing while the server carries on is exactly the shape of failure a
     # harness that only checks its own assertions calls green.
-    severe=$(grep -nE '\[[0-9:]+ (ERROR|SEVERE|FATAL)\]|Exception|Error occurred while enabling|Could not load .plugin' "$CONSOLE" || true)
+    #
+    # The harness's own "FAIL <scenario>: <why>" lines are excluded, and only
+    # those. A scenario is allowed to fail - several are written to - and its
+    # message routinely names the exception it caught, which the pattern above
+    # would otherwise read as the server being broken. Nothing is hidden by this:
+    # every one of those lines is in the result file too, and check_results below
+    # fails the run on it by name.
+    severe=$(grep -nE '\[[0-9:]+ (ERROR|SEVERE|FATAL)\]|Exception|Error occurred while enabling|Could not load .plugin' "$CONSOLE" \
+        | grep -v '\[TradeShopIT\] FAIL ' || true)
     [ -z "$severe" ] || die "the console carries severe lines:
 $severe"
 

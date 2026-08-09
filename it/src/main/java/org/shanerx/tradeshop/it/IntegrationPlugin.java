@@ -325,6 +325,11 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
             Assert.equal(1, scene.countInChest(Material.EMERALD), "the emerald should be in the shop chest");
             Assert.equal(9, scene.countInChest(Material.DIAMOND), "the shop should have one fewer diamond");
         }));
+
+        // The item-metadata matrix. Kept in its own file because it is a suite
+        // rather than a scenario, and because every row in it carries the reason a
+        // cheaper tier would have lied about it. See ItemMatrix.
+        scenarios.addAll(ItemMatrix.rows(this));
     }
 
     private static String strip(String coloured) {
@@ -460,7 +465,12 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
         }
     }
 
-    /** A named piece of behaviour and the moves that check it. */
-    private record Scenario(String name, Runnable body) {
+    /**
+     * A named piece of behaviour and the moves that check it.
+     *
+     * <p>Package-visible so that {@link ItemMatrix} can build its own without this
+     * file growing a second suite inside it.
+     */
+    record Scenario(String name, Runnable body) {
     }
 }
