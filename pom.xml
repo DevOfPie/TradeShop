@@ -176,6 +176,12 @@
                          testing. MockBukkit and the paper-api it pulls in are compiled
                          for 21, so the test sources have to be too. -->
                     <testRelease>21</testRelease>
+                    <!-- JDK 23+ stopped running annotation processors found on the
+                         classpath by default, which silently skips Lombok and drops
+                         every generated accessor. <proc>full</proc> forces annotation
+                         processing regardless of JDK; valid since JDK 21, so it raises
+                         no floor. -->
+                    <proc>full</proc>
                 </configuration>
             </plugin>
             <plugin>
