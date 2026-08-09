@@ -419,10 +419,17 @@
             <version>1.1.1</version>
         </dependency>
 
+        <!-- 2.0.2 is the current GA, and it is also what the plugin already meets
+             at run time: ci/integration.sh installs BKCommonLib 2.0.2-SNAPSHOT
+             build 2031 on the server it boots. Compiling against 1.20.2-v1 while
+             running against 2.0.x was a mismatch a build could not see - the same
+             shape of defect the paper/spigot ordering comment below is about.
+             The one type TradeShop touches, JsonSerializer, has identical
+             signatures in both, so nothing in src/ changes. -->
         <dependency>
             <groupId>com.bergerkiller.bukkit</groupId>
             <artifactId>BKCommonLib</artifactId>
-            <version>1.20.2-v1</version>
+            <version>2.0.2</version>
             <scope>provided</scope>
         </dependency>
 
