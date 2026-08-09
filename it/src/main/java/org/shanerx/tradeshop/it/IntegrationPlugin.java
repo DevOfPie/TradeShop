@@ -28,6 +28,7 @@ import org.bukkit.event.server.ServerLoadEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.shanerx.tradeshop.TradeShop;
 import org.shanerx.tradeshop.shop.Shop;
 import org.shanerx.tradeshop.shop.ShopChest;
 import org.shanerx.tradeshop.shop.ShopStatus;
@@ -353,6 +354,26 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
                 () -> shopOnSignMaterial(14, "OAK_WALL_HANGING_SIGN",
                         "the catalogue built <WOOD>_HANGING_WALL_SIGN, which matches no material, "
                                 + "so no wall-hanging sign was ever recognised")));
+
+        // Tab completion, built from the live item registry rather than from a
+        // blocklist that stopped being updated. Here as well as at tier 1
+        // because this is the only tier where the library's registry query - the
+        // implementation an operator actually gets - can run at all.
+        scenarios.add(new Scenario("tabCompleteOffersOnlyMaterialsWithAnItemForm", () -> {
+            List<String> offered = ((TradeShop) Bukkit.getPluginManager().getPlugin("TradeShop"))
+                    .getListManager().getGameMats();
+
+            Assert.that(offered.contains("DIAMOND"), "a diamond should be offered for trade");
+            Assert.that(offered.contains("PALE_OAK_SIGN"),
+                    "a pale oak sign is an item on this server and should be offered");
+
+            // Neither of these was in the sixty-nine constant blocklist, because
+            // neither existed when it was last edited.
+            Assert.that(!offered.contains("PALE_OAK_WALL_HANGING_SIGN"),
+                    "a wall-hanging sign has no item form and cannot be traded");
+            Assert.that(!offered.contains("PALE_OAK_WALL_SIGN"),
+                    "and neither can a wall sign");
+        }));
 
         // The item-metadata matrix. Kept in its own file because it is a suite
         // rather than a scenario, and because every row in it carries the reason a
