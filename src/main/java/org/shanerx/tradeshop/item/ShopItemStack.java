@@ -43,6 +43,7 @@ import org.bukkit.inventory.meta.Damageable;
 import org.bukkit.inventory.meta.EnchantmentStorageMeta;
 import org.bukkit.inventory.meta.FireworkMeta;
 import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.inventory.meta.PotionMeta;
 import org.bukkit.util.io.BukkitObjectInputStream;
 import org.shanerx.tradeshop.TradeShop;
 import org.shanerx.tradeshop.utils.debug.Debug;
@@ -554,6 +555,37 @@ public class ShopItemStack implements Cloneable {
                     }
                 }
             }
+        }
+
+        // If item is a potion of any form. Every potion of a form shares one Material -
+        // POTION, SPLASH_POTION, LINGERING_POTION and TIPPED_ARROW - so without this
+        // block a shop asking for Strength was paid with Harming.
+        if (itemStackMeta instanceof PotionMeta && toCompareMeta instanceof PotionMeta &&
+                getShopSetting(ShopItemStackSettingKeys.COMPARE_POTION_EFFECTS).asBoolean()) {
+            PotionMeta itemStackPotionMeta = (PotionMeta) itemStackMeta,
+                    toComparePotionMeta = (PotionMeta) toCompareMeta;
+
+            // Return False if the base potion type differs. Since 1.20.5 the extended and
+            // upgraded variants are PotionType values of their own - LONG_STRENGTH and
+            // STRONG_STRENGTH against STRENGTH - so this one test covers all three of
+            // base, extended and upgraded.
+            if (!Objects.equals(itemStackPotionMeta.getBasePotionType(), toComparePotionMeta.getBasePotionType())) {
+                debugger.log("itemstack basePotionType: " + itemStackPotionMeta.getBasePotionType(), DebugLevels.ITEM_COMPARE);
+                debugger.log("toCompare basePotionType: " + toComparePotionMeta.getBasePotionType(), DebugLevels.ITEM_COMPARE);
+                return false;
+            }
+
+            // Return False if hasCustomEffects differs (one has one doesn't)
+            if (itemStackPotionMeta.hasCustomEffects() != toComparePotionMeta.hasCustomEffects()) {
+                debugger.log("itemstack hasCustomEffects: " + itemStackPotionMeta.hasCustomEffects(), DebugLevels.ITEM_COMPARE);
+                debugger.log("toCompare hasCustomEffects: " + toComparePotionMeta.hasCustomEffects(), DebugLevels.ITEM_COMPARE);
+                return false;
+            }
+
+            // Return False if itemStack hasCustomEffects && the brewed-in effects are not equal
+            if (itemStackPotionMeta.hasCustomEffects() &&
+                    !Objects.equals(itemStackPotionMeta.getCustomEffects(), toComparePotionMeta.getCustomEffects()))
+                return false;
         }
 
         // If compareAttributeModifier is on
