@@ -355,14 +355,25 @@ public class DataStorage {
 
     private final Map<String, JsonShopData> chunkDataCache = new HashMap<>();
 
+    /**
+     * One live view of a chunk's shop file, however many times it is asked for.
+     *
+     * <p>The miss path used to cache one {@link JsonShopData} and return a second one
+     * built from the same file, so no caller ever held the object the cache was
+     * handing out. That matters because a {@code JsonShopData} is not a handle onto a
+     * file, it is a copy of one: it reads the whole chunk into memory when it is
+     * constructed and writes the whole of that memory back on every save. Two of them
+     * over one file are two copies of the same shops, and a save through either
+     * writes its own copy over whatever the other put there - the same shape as the
+     * shop that came back off disk with an empty cost side.
+     *
+     * <p>The same reasoning as {@code shopCache} one level up: one live object per
+     * thing, which is what the rest of the plugin assumes when it loads something,
+     * changes it and saves it.
+     */
     protected ShopConfiguration getShopData(ShopChunk chunk) {
         if (dataType == DataType.FLATFILE) {
-            String serializedChunk = chunk.serialize();
-            if (chunkDataCache.containsKey(serializedChunk))
-                return chunkDataCache.get(serializedChunk);
-            JsonShopData data = new JsonShopData(chunk);
-            chunkDataCache.put(serializedChunk, data);
-            return new JsonShopData(chunk);
+            return chunkDataCache.computeIfAbsent(chunk.serialize(), serialized -> new JsonShopData(chunk));
         }
 
         throw new NotImplementedException("Data storage type " + dataType + " has not been implemented yet.");
