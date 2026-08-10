@@ -110,7 +110,10 @@ BKCL_SHA256=e7b15d76898834a0b7e8a080982a3f24c69b4a82e87a1e5ec29bce8d17045c46
 # 41 -> 42 with The cost side, the cost side a shop loses the first time it is read off disk.
 #          That one was not in the review: it was noticed as `cost: []` in a shop file
 #          left behind by a run, characterised afterwards, and pinned here.
-EXPECTED_SCENARIOS=42
+# 42 -> 45 with The sign side: a header written on the BACK of a sign, the player who has
+#          to be told it did nothing, and the front-side control that must not move.
+#          The first two are written to FAIL until the fix lands.
+EXPECTED_SCENARIOS=45
 
 # Tier 3. The client is not optional: a run that boots a server, plays nothing
 # and exits 0 is the vacuous pass this project treats as the worst possible

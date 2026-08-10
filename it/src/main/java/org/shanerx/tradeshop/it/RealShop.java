@@ -209,6 +209,26 @@ final class RealShop {
     }
 
     /**
+     * As {@link #createShop}, on the side of the sign the caller names.
+     *
+     * <p>A sign has had two sides since 1.20 and {@link SignChangeEvent} has
+     * carried which one is being edited for just as long. The three-argument
+     * constructor {@link #createShop} uses is the pre-1.20 one and answers
+     * {@link Side#FRONT} for {@code getSide()}, so it cannot express a back-side
+     * edit at all - which is exactly the edit a player makes by walking round a
+     * sign and typing on the other face.
+     *
+     * <p>Callers pass {@link Side#FRONT} explicitly rather than reusing
+     * {@link #createShop} when the point of the scenario is the side: a control
+     * that differs from its subject in the constructor as well as in the
+     * argument is not a control.
+     */
+    void createShopOn(Side side, String header, String product, String cost) {
+        run(() -> Bukkit.getPluginManager().callEvent(
+                new SignChangeEvent(signBlock, owner, new String[]{header, product, cost, ""}, side)));
+    }
+
+    /**
      * The owner puts the product in the chest.
      *
      * <p>No {@code update()} afterwards, and that is not an omission. A
@@ -257,14 +277,24 @@ final class RealShop {
      * stored.
      */
     String[] signLines() {
+        return signLines(Side.FRONT);
+    }
+
+    /** As {@link #signLines()}, reading the side the caller names. */
+    String[] signLines(Side side) {
         return get(() -> {
-            String[] raw = ((Sign) signBlock.getState()).getSide(Side.FRONT).getLines();
+            String[] raw = ((Sign) signBlock.getState()).getSide(side).getLines();
             String[] clean = new String[raw.length];
             for (int i = 0; i < raw.length; i++) {
                 clean[i] = ChatColor.stripColor(raw[i]);
             }
             return clean;
         });
+    }
+
+    /** Everything the plugin has said to this scene's owner, colour stripped. */
+    java.util.List<String> ownerWasTold() {
+        return HarnessPlayer.heardBy(owner);
     }
 
     int countOf(Player player, Material material) {
