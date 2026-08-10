@@ -379,8 +379,23 @@ public class Shop {
 
         map.put("shopLoc", shopLoc.serialize());
         map.put("owner", owner.serialize());
-        map.put("managers", managers);
-        map.put("members", members);
+        // Copied into lists rather than handed over as the Sets they are held in,
+        // and that is a correctness fix rather than defensive copying. This map is
+        // not only written to a file: ShopConfiguration.save puts it straight into
+        // the storage layer's IN-MEMORY document, which is what the next reader of
+        // that chunk is answered out of until the file is re-read. deserialize
+        // below reads both keys with getSerializableList, whose first act is
+        // `(List) get(key)` - so a Set read back before the reload threw
+        //
+        //   java.lang.ClassCastException: class java.util.HashSet cannot be cast
+        //   to class java.util.List
+        //
+        // out of Shop.deserialize, and DataStorage.getMatchingShopsInChunk is the
+        // only caller of that reached from ShopUser.findProximityShop, which is
+        // /tradeshop find. A list is what the file holds and what the reader
+        // wants, so it is what is stored.
+        map.put("managers", new ArrayList<>(managers));
+        map.put("members", new ArrayList<>(members));
         map.put("shopType", shopType.name());
         map.put("product", products);
         map.put("cost", costs);

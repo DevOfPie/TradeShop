@@ -293,6 +293,14 @@ final class ConfigAndMetricsRows {
         // only caller and ShopUser.findProximityShop:181 is the only caller of that,
         // so /tradeshop find throws for any chunk that holds a shop - which is every
         // chunk it is worth searching.
+        //
+        // THE SECOND DEFECT ON THE SAME CALL, found because this row was green here
+        // and red in CI on the same commit: Shop.serialize:382 hands the storage
+        // layer the live Sets the shop holds its managers and members in, and
+        // Shop.deserialize:274 reads them back with a cast to List. Which of those
+        // two the search hits depends on whether the chunk file has been re-read
+        // since the save, so the row could only see it when it lost a race. The
+        // second half of this scenario removes the race rather than the assertion.
         // ------------------------------------------------------------------
         rows.add(new IntegrationPlugin.Scenario("searchingAChunkFindsTheShopsInIt", () -> {
             RealShop scene = new RealShop(plugin, FIRST_SITE + 4);
@@ -310,6 +318,41 @@ final class ConfigAndMetricsRows {
                             + "path in the file, which is what makes /tradeshop find throw");
             Assert.equal(where.toString(), found.get(0).getShopLocationAsSL().toString(),
                     "and the shop it finds is the one that is there");
+
+            // THE SAME SEARCH WITH NO TICK BETWEEN THE SAVE AND IT, and this is the
+            // half of the row that is worth having. The search above runs in its own
+            // scheduled task, so a ChunkUnloadEvent can land between the shop being
+            // written and the chunk being searched - and one that does is a repair:
+            // ChunkUnloadListener drops the chunk from DataStorage's per-chunk cache,
+            // the next getShopData builds a fresh JsonShopData, and it reads the file
+            // off disk instead of the storage layer's in-memory copy of what was just
+            // written. Whether that happened was a coin toss, and it decided the row:
+            // this branch was green three times running here and red in two of three
+            // CI runs OF THE SAME COMMIT.
+            //
+            // Doing both inside one Sync.get removes the window. Events run on the
+            // server thread, a task owns that thread for its whole body, so the cache
+            // holds the instance the save wrote through and the search is answered
+            // out of memory - which is what a real /tradeshop find does after any
+            // trade in a chunk nobody has walked out of.
+            List<Shop> withoutAWindow = Sync.get(plugin, () -> {
+                Shop live = Shop.loadShop(where);
+                tradeShop().getDataStorage().saveShop(live);
+                return tradeShop().getDataStorage().getMatchingShopsInChunk(
+                        scene.signBlock().getChunk().getChunkSnapshot(), false, null, null);
+            });
+
+            Assert.equal(1, withoutAWindow.size(),
+                    "searching a chunk in the same tick a shop in it was saved must find that "
+                            + "shop - Shop.serialize:382 handed the storage layer the live Set the "
+                            + "shop holds its managers in, and Shop.deserialize:274 reads it back "
+                            + "with getSerializableList, whose first act is (List) get(key). Off "
+                            + "disk that value is an array and the round trip works; before the "
+                            + "file is re-read it is still the Set, and /tradeshop find throws "
+                            + "ClassCastException: java.util.HashSet cannot be cast to "
+                            + "java.util.List");
+            Assert.equal(where.toString(), withoutAWindow.get(0).getShopLocationAsSL().toString(),
+                    "and it is still the shop that is there");
         }));
 
         // ------------------------------------------------------------------
