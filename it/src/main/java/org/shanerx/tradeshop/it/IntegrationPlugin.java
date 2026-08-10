@@ -420,6 +420,14 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
         // rather than a scenario, and because every row in it carries the reason a
         // cheaper tier would have lied about it. See ItemMatrix.
         scenarios.addAll(ItemMatrix.rows(this));
+
+        // The seven reported defects, in their own file for the same reason as
+        // the matrix: a suite rather than a scenario, and every row carries the
+        // file and line it pins. Last, because one of them stands an older
+        // config.yml up on disk and reloads the plugin's settings from it -
+        // recoverable, and restored in a finally, but not something to run in
+        // front of rows that read the same settings.
+        scenarios.addAll(DefectRows.rows(this));
     }
 
     /**
