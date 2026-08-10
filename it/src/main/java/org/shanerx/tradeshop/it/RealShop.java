@@ -72,6 +72,30 @@ final class RealShop {
     private Player owner;
 
     /**
+     * The site register. Every index in use, in one place, because five separate
+     * hand-kept lists is how two of them came to claim the same ground.
+     *
+     * <table>
+     *   <tr><td>1..5, 12..18, 50..52</td><td>{@link IntegrationPlugin}, inline rows</td></tr>
+     *   <tr><td>7</td><td>{@link ClientPhase} - <b>reserved, see below</b></td></tr>
+     *   <tr><td>10..11</td><td>{@link ItemMatrix}</td></tr>
+     *   <tr><td>20..27</td><td>{@link DefectRows}</td></tr>
+     *   <tr><td>30..39</td><td>{@link IssueRows}</td></tr>
+     *   <tr><td>40..46</td><td>{@link ConfigAndMetricsRows}</td></tr>
+     *   <tr><td>60</td><td>{@link SettingToggleRows}</td></tr>
+     * </table>
+     *
+     * <p><b>A site is a namespace, and two rows on one site is not a near miss.</b>
+     * TradeShop keys every shop, chest linkage and protection entry by world name
+     * plus coordinates, and the world outlives the scenario. The second row to
+     * arrive finds whatever the first left: {@code IntegrationPlugin}'s sign-break
+     * control and {@code ConfigAndMetricsRows}' chunk-count row both took 41, the
+     * control left a sign standing that still read as a shop, and
+     * {@code Utils.createShop:515} refused the second row's shop with
+     * "existing-shop" - a red row whose message pointed at the counting code,
+     * which was correct all along. Take a range that is not in the table above and
+     * add it to the table in the same commit.
+     *
      * @param index the scenario's patch of the world, at x = {@code index * 1000}.
      *              <b>7 is not available</b>: {@link ClientPhase} builds its site
      *              at x = 7000 from {@code getHighestBlockYAt}, and a scenario
@@ -111,6 +135,16 @@ final class RealShop {
      * rather than a multiple of nine. Which of them a shop can actually be built
      * on is a property of the running server's blocks, so it is asked here rather
      * than assumed.
+     *
+     * <p>Both blocks are cleared to air first, and that is load-bearing rather
+     * than tidy. {@code CraftBlock.setTypeAndData} only drops the old block
+     * entity when the block itself changes - {@code blockData.getBlock() !=
+     * old.getBlock()} - so setting {@code OAK_SIGN} over an {@code OAK_SIGN} that
+     * is already there leaves its text exactly where it was, and setting
+     * {@code CHEST} over a {@code CHEST} leaves that chest's contents and
+     * persistent data. A scene that started on ground another row had used was
+     * therefore starting on that row's sign, still reading as a shop. Placing air
+     * changes the block, so the entity goes.
      */
     void placeStorageAndSign(Material storageMaterial, Material signMaterial) {
         run(() -> {
@@ -119,6 +153,9 @@ final class RealShop {
 
             chestBlock = world.getBlockAt(x, CHEST_Y, 0);
             signBlock = world.getBlockAt(x, CHEST_Y + 1, 0);
+
+            chestBlock.setType(Material.AIR, false);
+            signBlock.setType(Material.AIR, false);
 
             // Physics off: a standing sign with nothing solid under it pops off
             // as an item the moment the server ticks the block, and the chest is

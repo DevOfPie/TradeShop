@@ -489,8 +489,11 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
         // took, which is data deletion on the strength of a guess. Records
         // already orphaned stay exactly where they are; what changes is that no
         // new one is made.
+        //
+        // Sites 50..52, not 40..42: ConfigAndMetricsRows owns 40..46. See the
+        // site register on RealShop's constructor.
         scenarios.add(new Scenario("aShopStoredAgainstASignIsNotLeftBehindWhenThatSignIsBroken", () -> {
-            RealShop scene = new RealShop(this, 40);
+            RealShop scene = new RealShop(this, 50);
             scene.placeChestAndSign();
             scene.createShopByCommand("1 DIAMOND", "1 EMERALD");
 
@@ -546,7 +549,7 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
         // is asked on every sign break, so the two paths that already worked
         // have to be shown to still work. Green before the fix and after it.
         scenarios.add(new Scenario("breakingAnOrdinaryShopSignStillBehavesExactlyAsBefore", () -> {
-            RealShop shopScene = new RealShop(this, 41);
+            RealShop shopScene = new RealShop(this, 51);
             shopScene.placeChestAndSign();
             shopScene.createShopByCommand("1 DIAMOND", "1 EMERALD");
 
@@ -572,7 +575,7 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
             // A sign that is nobody's shop. The new question is asked here too -
             // it is asked of every sign - and the answer has to be that nothing
             // happens at all.
-            RealShop plain = new RealShop(this, 42);
+            RealShop plain = new RealShop(this, 52);
             plain.placeChestAndSign();
             Assert.that(!plain.get(() -> ShopType.isShop(plain.signBlock())),
                     "precondition: a blank sign is not a shop");

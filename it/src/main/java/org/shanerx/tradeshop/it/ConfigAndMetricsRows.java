@@ -71,8 +71,8 @@ final class ConfigAndMetricsRows {
     }
 
     /**
-     * These rows' patch of the world, clear of tier 2's 1..5, the matrix's 10..11,
-     * DefectRows' 20..27, IssueRows' 30..39 and tier 3's 7000.
+     * These rows' patch of the world, 40..46. Registered on {@code RealShop}'s
+     * constructor, which is the only list of who owns what.
      */
     private static final int FIRST_SITE = 40;
 
