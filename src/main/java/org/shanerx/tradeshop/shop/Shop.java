@@ -242,53 +242,71 @@ public class Shop {
 
         StringBuilder dataRemaining = new StringBuilder();
 
-        // singleLayerKeySet, NOT keySet. FlatFileSection.keySet() is the DEEP key set:
-        // a shop whose file holds a nested "chestLoc" object answers "chestLoc.world",
-        // "chestLoc.x", "chestLoc.y"... and never the bare "chestLoc" this switch is
-        // written against. Every branch below whose value is an object or a list was
-        // therefore dead, and the shop came back with no chest location, no settings and
-        // - the one that costs a shop owner their items - an empty product and cost side.
-        for (String key : data.singleLayerKeySet()) {
-            switch (key) {
-                case "shopLoc":
-                case "shopType":
-                case "owner":
-                    break; // Already used so skip
-                case "managers":
-                    shop.managers = new HashSet<>(data.getSerializableList(key, UUID.class));
-                    break;
-                case "members":
-                    shop.members = new HashSet<>(data.getSerializableList(key, UUID.class));
-                    break;
-                case "product":
-                    deserializeSide(data, key).forEach((itm) -> shop.addSideItem(ShopItemSide.PRODUCT, itm));
-                    break;
-                case "cost":
-                    deserializeSide(data, key).forEach((itm) -> shop.addSideItem(ShopItemSide.COST, itm));
-                    break;
-                case "chestLoc":
-                    // Written as a nested object today and as a location string by older
-                    // builds, so both are read. The object form goes through
-                    // getMapParameterized rather than a cast of get(): the raw get()
-                    // hands back the storage layer's own node type, which is not a
-                    // java.util.Map, and only the typed getters convert it.
-                    shop.chestLoc = data.get(key) instanceof String ?
-                            ShopLocation.deserialize(data.get(key).toString()) :
-                            ShopLocation.deserialize(data.getMapParameterized(key));
-                    break;
-                case "status":
-                    shop.status = ShopStatus.valueOf(data.get(key).toString());
-                    break;
-                case "shopSettings":
-                    shop.shopSettings = deserializeShopSettings(data.getMapParameterized(key));
-                    break;
-                case "availableTrades":
-                    shop.availableTrades = (int) data.get(key);
-                    break;
-                default:
-                    dataRemaining.append(key).append(": ").append(data.get(key)).append("\n");
-                    break;
+        // Nothing is written while the shop is being read, and that is load-bearing
+        // rather than tidy. `data` is a LIVE VIEW of the file: the storage layer
+        // re-reads it on every access once its modification time has moved. The loop
+        // below used to move it - addSideItem ends at saveShop - so the half-built
+        // shop was written over the file the loop was still reading, and every key
+        // after the first side was answered out of that. The cost side came back
+        // empty, the emptied shop was saved again, and the shop reloaded INCOMPLETE.
+        //
+        // aSync is the flag this class already uses for "not attached to the world,
+        // do not touch disk", and loadASync sets it the moment deserialization
+        // returns; it is simply set for the loop as well. Restored to false at the
+        // end because that is the state the constructor left it in.
+        shop.aSync = true;
+
+        try {
+            // singleLayerKeySet, NOT keySet. FlatFileSection.keySet() is the DEEP key set:
+            // a shop whose file holds a nested "chestLoc" object answers "chestLoc.world",
+            // "chestLoc.x", "chestLoc.y"... and never the bare "chestLoc" this switch is
+            // written against. Every branch below whose value is an object or a list was
+            // therefore dead, and the shop came back with no chest location, no settings and
+            // - the one that costs a shop owner their items - an empty product and cost side.
+            for (String key : data.singleLayerKeySet()) {
+                switch (key) {
+                    case "shopLoc":
+                    case "shopType":
+                    case "owner":
+                        break; // Already used so skip
+                    case "managers":
+                        shop.managers = new HashSet<>(data.getSerializableList(key, UUID.class));
+                        break;
+                    case "members":
+                        shop.members = new HashSet<>(data.getSerializableList(key, UUID.class));
+                        break;
+                    case "product":
+                        deserializeSide(data, key).forEach((itm) -> shop.addSideItem(ShopItemSide.PRODUCT, itm));
+                        break;
+                    case "cost":
+                        deserializeSide(data, key).forEach((itm) -> shop.addSideItem(ShopItemSide.COST, itm));
+                        break;
+                    case "chestLoc":
+                        // Written as a nested object today and as a location string by older
+                        // builds, so both are read. The object form goes through
+                        // getMapParameterized rather than a cast of get(): the raw get()
+                        // hands back the storage layer's own node type, which is not a
+                        // java.util.Map, and only the typed getters convert it.
+                        shop.chestLoc = data.get(key) instanceof String ?
+                                ShopLocation.deserialize(data.get(key).toString()) :
+                                ShopLocation.deserialize(data.getMapParameterized(key));
+                        break;
+                    case "status":
+                        shop.status = ShopStatus.valueOf(data.get(key).toString());
+                        break;
+                    case "shopSettings":
+                        shop.shopSettings = deserializeShopSettings(data.getMapParameterized(key));
+                        break;
+                    case "availableTrades":
+                        shop.availableTrades = (int) data.get(key);
+                        break;
+                    default:
+                        dataRemaining.append(key).append(": ").append(data.get(key)).append("\n");
+                        break;
+                }
             }
+        } finally {
+            shop.aSync = false;
         }
 
         if (dataRemaining.length() > 0) {
