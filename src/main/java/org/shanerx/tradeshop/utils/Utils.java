@@ -397,6 +397,25 @@ public class Utils {
         return badList;
     }
 
+    /**
+     * The size {@link Bukkit#createInventory} will accept for a scratch copy of a
+     * container that holds {@code slots} slots.
+     *
+     * <p>CraftBukkit takes a multiple of nine between nine and 54 and throws on
+     * anything else, and the storage types a shop may be built on are not all
+     * multiples of nine: a hopper and a brewing stand hold five, and a furnace, a
+     * smoker and a blast furnace hold three. Handing it the raw slot count meant a
+     * shop on any of those threw the moment it tried to count its own stock - which
+     * happens while the shop is being created, so the shop never existed at all.
+     *
+     * <p>Rounded up, never down. Every caller copies a real container into the result
+     * and then reads it back, so spare slots cost nothing - they read as null and are
+     * skipped - while a size too small would silently drop stock.
+     */
+    public static int scratchInventorySize(int slots) {
+        return Math.min(Math.max((int) (Math.ceil(slots / 9.0) * 9), 9), 54);
+    }
+
 
     /**
      * Checks whether a trade can take place.
@@ -412,7 +431,7 @@ public class Utils {
             return new Tuple<>(ExchangeStatus.NOT_TRADE, createBadList());
         }
 
-        Inventory playerInventory = Bukkit.createInventory(null, playerInv.getStorageContents().length);
+        Inventory playerInventory = Bukkit.createInventory(null, scratchInventorySize(playerInv.getStorageContents().length));
         playerInventory.setContents(playerInv.getStorageContents().clone());
 
         Inventory shopInventory = null;
@@ -427,7 +446,7 @@ public class Utils {
             }
         } else {
             Inventory shopInv = shop.getChestAsSC().getInventory();
-            shopInventory = Bukkit.createInventory(null, shopInv.getStorageContents().length);
+            shopInventory = Bukkit.createInventory(null, scratchInventorySize(shopInv.getStorageContents().length));
             shopInventory.setContents(shopInv.getStorageContents().clone());
         }
 

@@ -222,7 +222,17 @@ public class DataStorage {
     public Shop loadShopFromSign(ShopLocation sign) {
         if (sign == null) return null;
         Shop cached = shopCache.getIfPresent(sign.toString());
-        return cached != null ? cached : getShopData(sign.getChunk()).load(sign);
+        if (cached != null) return cached;
+
+        Shop loaded = getShopData(sign.getChunk()).load(sign);
+
+        // One live object per shop, which is what the rest of the plugin assumes when
+        // it loads a shop, changes it and saves it. Deserialization used to reach this
+        // cache by saving the shop it was still building - the save is gone, so the
+        // caching it was doing as a side effect is done here on purpose.
+        if (loaded != null) shopCache.put(sign.toString(), loaded);
+
+        return loaded;
     }
 
     public Shop loadShopFromStorage(ShopLocation chest) {

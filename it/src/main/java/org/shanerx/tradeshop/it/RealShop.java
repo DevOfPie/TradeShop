@@ -99,6 +99,20 @@ final class RealShop {
      * oak sign or a hanging sign exists at all.
      */
     void placeChestAndSign(Material signMaterial) {
+        placeStorageAndSign(Material.CHEST, signMaterial);
+    }
+
+    /**
+     * As {@link #placeChestAndSign()}, on a storage block of the caller's
+     * choosing.
+     *
+     * <p>{@code ShopStorage.Storages} permits ten block types and they do not all
+     * hold the same number of slots - a hopper and a brewing stand hold five
+     * rather than a multiple of nine. Which of them a shop can actually be built
+     * on is a property of the running server's blocks, so it is asked here rather
+     * than assumed.
+     */
+    void placeStorageAndSign(Material storageMaterial, Material signMaterial) {
         run(() -> {
             World world = Bukkit.getWorlds().get(0);
             int x = index * 1000;
@@ -110,7 +124,7 @@ final class RealShop {
             // as an item the moment the server ticks the block, and the chest is
             // placed in the same breath. A hanging sign with nothing above it
             // would go the same way, which is the other reason this is false.
-            chestBlock.setType(Material.CHEST, false);
+            chestBlock.setType(storageMaterial, false);
             signBlock.setType(signMaterial, false);
 
             owner = HarnessPlayer.create("owner" + index, chestBlock.getLocation().add(0.5, 1, 1.5), signBlock);

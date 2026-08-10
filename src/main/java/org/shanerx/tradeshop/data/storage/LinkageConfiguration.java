@@ -66,8 +66,17 @@ public interface LinkageConfiguration {
         save();
     }
 
+    /**
+     * Unlinks a storage block from whatever shop it was linked to.
+     *
+     * <p>Keyed by {@code toString()}, like every other method here. The map is keyed by
+     * String - see {@link #addLinkage} - and {@code Map.remove} takes an Object, so
+     * passing the {@link ShopLocation} itself compiled and never matched anything: the
+     * entry outlived the chest, and the block went on reading as a shop chest to every
+     * path that asks.
+     */
     default void removeChest(ShopLocation chestLocation) {
-        getLinkageData().remove(chestLocation);
+        getLinkageData().remove(chestLocation.toString());
         save();
     }
 
