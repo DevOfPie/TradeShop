@@ -60,8 +60,14 @@ final class SettingToggleRows {
     private SettingToggleRows() {
     }
 
-    /** Clear of tier 2's 1..5, the matrix's 10..11, DefectRows' 20..27 and tier 3's 7000. */
-    private static final int FIRST_SITE = 30;
+    /**
+     * This suite's patch of the world. Reserved through {@link SiteAllocator}
+     * rather than agreed by comment - this suite and {@code IssueRows} both
+     * once wrote a comment exactly like this one claiming 30, and neither
+     * comment named the other. Both landing on the same site is the collision
+     * {@link SiteAllocator} exists to make impossible.
+     */
+    private static final SiteAllocator.Reservation SITE = SiteAllocator.reserve("SettingToggleRows", 1);
 
     static List<IntegrationPlugin.Scenario> rows(IntegrationPlugin plugin) {
         List<IntegrationPlugin.Scenario> rows = new ArrayList<>();
@@ -122,7 +128,7 @@ final class SettingToggleRows {
         // A toggle that outlives the process that made it.
         // ------------------------------------------------------------------
         rows.add(new IntegrationPlugin.Scenario("aPerItemToggleSurvivesASaveAndReload", () -> {
-            RealShop scene = new RealShop(plugin, FIRST_SITE);
+            RealShop scene = new RealShop(plugin, SITE.at(0));
             scene.placeChestAndSign();
             scene.createShopByCommand("1 DIAMOND", "1 EMERALD");
 

@@ -73,12 +73,26 @@ final class RealShop {
 
     /**
      * @param index the scenario's patch of the world, at x = {@code index * 1000}.
-     *              <b>7 is not available</b>: {@link ClientPhase} builds its site
-     *              at x = 7000 from {@code getHighestBlockYAt}, and a scenario
-     *              that has left blocks floating there moves the client's site
-     *              out from under the bot, which then fails to place anything.
+     *              Every suite gets this from a {@link SiteAllocator.Reservation}
+     *              rather than choosing it by hand - see {@link SiteAllocator}
+     *              for why a hand-agreed range was not enough - except the
+     *              scenarios declared directly in {@code IntegrationPlugin},
+     *              which predate that class and are reserved there as one
+     *              block instead.
+     * @throws IllegalArgumentException if {@code index} is
+     *              {@link SiteAllocator#TIER_3_CLIENT}: that site belongs to
+     *              {@link ClientPhase}, which builds it directly rather than
+     *              through this class, and a scene left there would leave
+     *              blocks the client's {@code getHighestBlockYAt} would trip
+     *              over
      */
     RealShop(Plugin plugin, int index) {
+        if (index == SiteAllocator.TIER_3_CLIENT) {
+            throw new IllegalArgumentException("site " + index + " is reserved for tier 3's client ("
+                    + "ClientPhase, x=" + (SiteAllocator.TIER_3_CLIENT * 1000) + "); a scene built there "
+                    + "would leave blocks behind that move the client's site out from under the bot when "
+                    + "it next asks getHighestBlockYAt where the ground is");
+        }
         this.plugin = plugin;
         this.index = index;
     }

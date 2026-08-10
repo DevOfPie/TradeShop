@@ -81,8 +81,12 @@ final class DefectRows {
     private DefectRows() {
     }
 
-    /** These rows' patch of the world, clear of tier 2's 1..5, the matrix's 10..11 and tier 3's 7000. */
-    private static final int FIRST_SITE = 20;
+    /**
+     * These rows' patch of the world. Reserved through {@link SiteAllocator}
+     * rather than agreed by comment - see that class for why a hand-typed range
+     * stopped being trustworthy.
+     */
+    private static final SiteAllocator.Reservation SITE = SiteAllocator.reserve("DefectRows", 8);
 
     static List<IntegrationPlugin.Scenario> rows(IntegrationPlugin plugin) {
         List<IntegrationPlugin.Scenario> rows = new ArrayList<>();
@@ -115,7 +119,7 @@ final class DefectRows {
 
             // A scene only so that the config edits are marshalled onto the
             // server thread the same way every other touch in this tier is.
-            RealShop scene = new RealShop(plugin, FIRST_SITE);
+            RealShop scene = new RealShop(plugin, SITE.at(0));
             scene.placeChestAndSign();
 
             try {
@@ -167,7 +171,7 @@ final class DefectRows {
         // without ever having been written.
         // ------------------------------------------------------------------
         rows.add(new IntegrationPlugin.Scenario("aMissingPerItemSettingDoesNotThrowInsideTheTradeGate", () -> {
-            RealShop scene = new RealShop(plugin, FIRST_SITE + 1);
+            RealShop scene = new RealShop(plugin, SITE.at(1));
             scene.placeChestAndSign();
             scene.createShopByCommand("1 DIAMOND", "1 EMERALD");
             scene.stockShop(new ItemStack(Material.DIAMOND, 10));
@@ -240,7 +244,7 @@ final class DefectRows {
         // taken by unlinking the whole of it.
         // ------------------------------------------------------------------
         rows.add(new IntegrationPlugin.Scenario("unlinkingAChestRemovesItsLinkageEntry", () -> {
-            RealShop scene = new RealShop(plugin, FIRST_SITE + 2);
+            RealShop scene = new RealShop(plugin, SITE.at(2));
             scene.placeChestAndSign();
             scene.createShopByCommand("1 DIAMOND", "1 EMERALD");
 
@@ -285,7 +289,7 @@ final class DefectRows {
         // ------------------------------------------------------------------
         rows.add(new IntegrationPlugin.Scenario("aShopOnAHopperCanCountItsStockAndTrade", () -> {
             Object allowed = Setting.ALLOWED_SHOPS.getSetting();
-            RealShop scene = new RealShop(plugin, FIRST_SITE + 3);
+            RealShop scene = new RealShop(plugin, SITE.at(3));
 
             try {
                 allowStorage(scene, "HOPPER");
@@ -329,7 +333,7 @@ final class DefectRows {
 
         rows.add(new IntegrationPlugin.Scenario("aShopOnABrewingStandCanBeCreated", () -> {
             Object allowed = Setting.ALLOWED_SHOPS.getSetting();
-            RealShop scene = new RealShop(plugin, FIRST_SITE + 4);
+            RealShop scene = new RealShop(plugin, SITE.at(4));
 
             try {
                 allowStorage(scene, "BREWING_STAND");
@@ -374,7 +378,7 @@ final class DefectRows {
         // so isDoubleChest is false there and this method is never entered at all.
         // ------------------------------------------------------------------
         rows.add(new IntegrationPlugin.Scenario("bothHalvesOfAZAxisDoubleChestResolveToEachOther", () -> {
-            Block[] halves = doubleChest(plugin, FIRST_SITE + 5, false);
+            Block[] halves = doubleChest(plugin, SITE.at(5), false);
             Block left = halves[0], right = halves[1];
 
             Assert.that(Sync.get(plugin, () -> ShopChest.isDoubleChest(left)),
@@ -388,7 +392,7 @@ final class DefectRows {
         }));
 
         rows.add(new IntegrationPlugin.Scenario("bothHalvesOfAnXAxisDoubleChestResolveToEachOther", () -> {
-            Block[] halves = doubleChest(plugin, FIRST_SITE + 6, true);
+            Block[] halves = doubleChest(plugin, SITE.at(6), true);
             Block left = halves[0], right = halves[1];
 
             Assert.that(Sync.get(plugin, () -> ShopChest.isDoubleChest(left)),
@@ -434,7 +438,7 @@ final class DefectRows {
         // JSON, and the defect is a file's mtime moving under a reader.
         // ------------------------------------------------------------------
         rows.add(new IntegrationPlugin.Scenario("aShopReadBackFromDiskStillTakesItsCost", () -> {
-            RealShop scene = new RealShop(plugin, FIRST_SITE + 7);
+            RealShop scene = new RealShop(plugin, SITE.at(7));
             scene.placeChestAndSign();
             scene.createShopByCommand("1 DIAMOND", "1 EMERALD");
 
