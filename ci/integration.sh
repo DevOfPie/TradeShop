@@ -101,7 +101,8 @@ BKCL_SHA256=e7b15d76898834a0b7e8a080982a3f24c69b4a82e87a1e5ec29bce8d17045c46
 # W9 IS ADDING ROWS THAT ARE WRITTEN TO FAIL. They are the defects a code review
 # reported and nobody ever ran, and the branch carrying them is red on purpose:
 # the tests land before the fixes so that each one is known to have failed first.
-# A green run on this branch is the thing to distrust. See it/DefectRows.java.
+# A green run on this branch is the thing to distrust. See it/DefectRows.java,
+# and it/IssueRows.java for the same pattern applied to reports off the tracker.
 #
 # 34 -> 36 with The per-item setting, the per-item setting an older config.yml is missing.
 # 36 -> 37 with The chest linkage, the chest linkage that removeChest cannot remove.
@@ -120,7 +121,12 @@ BKCL_SHA256=e7b15d76898834a0b7e8a080982a3f24c69b4a82e87a1e5ec29bce8d17045c46
 #          clicking it in the edit GUI, and the trade that answer decides. That one is
 #          a tier-3 STEP rather than an in-server scenario - it needs a hand to click
 #          with - so it raises the client's count from seven to eight.
-EXPECTED_SCENARIOS=45
+# 45 -> 46 with The removed chest, upstream #160's shop that has lost its storage block.
+# 46 -> 49 with The editable sign, upstream #152: the five shop states a sign has to be
+#          protected in, the trade and the ordinary sign that protecting it must not cost,
+#          and the plain-Bukkit PlayerSignOpenEvent that refuses the editor - named, so
+#          that a return to the Paper-only guard fails rather than passes quietly.
+EXPECTED_SCENARIOS=49
 
 # Tier 3. The client is not optional: a run that boots a server, plays nothing
 # and exits 0 is the vacuous pass this project treats as the worst possible

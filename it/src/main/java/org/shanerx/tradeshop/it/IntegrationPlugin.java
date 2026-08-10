@@ -435,6 +435,13 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
         // recoverable, and restored in a finally, but not something to run in
         // front of rows that read the same settings.
         scenarios.addAll(DefectRows.rows(this));
+
+        // The defects reported on the upstream tracker, in their own file: they
+        // arrive with an issue number and a reporter's steps rather than out of
+        // a code review, and keeping the two provenances apart is what lets a
+        // row say where it came from. After DefectRows because one of those
+        // rewrites config.yml.
+        scenarios.addAll(IssueRows.rows(this));
     }
 
     /**
