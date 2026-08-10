@@ -189,8 +189,18 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
         // onto it, and that write is done by the packet handler that fired
         // SignChangeEvent, not by the event bus. A harness that fires the event
         // itself is not a packet handler, so the block stays blank, the sign is
-        // never updated, the status never leaves OUT_OF_STOCK, and a click on
-        // the sign is not recognised as a click on a shop.
+        // never updated, and a click on the sign is not recognised as a click on
+        // a shop.
+        //
+        // The shop's STATUS is no longer part of that chain. It used to be:
+        // updateStatus() was reached only through updateSign(), so a shop whose
+        // sign could not be written was stuck on whatever status it had last -
+        // and this scenario asserted OUT_OF_STOCK over ten available trades to
+        // say so. Shop.saveShop() now recomputes status before it writes, which
+        // is the fix for a shop being STORED with a status it does not have, and
+        // a shop that is stocked and complete reports itself open whether or not
+        // anything managed to write its sign. The blocker below is what is left:
+        // a blank block, and a click that lands on nothing.
         //
         // Copying the event's finished lines onto the block is exactly the
         // workaround tier 1 carries, and reintroducing it here is the one thing
@@ -222,10 +232,11 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
 
             Assert.that(scene.get(() -> shop.getShopSign()) == null,
                     "getShopSign() is null while the block is blank, which is what stops the "
-                            + "status from ever being recomputed");
-            Assert.equal(ShopStatus.OUT_OF_STOCK, shop.getStatus(),
-                    "ten trades are available and the shop still says out of stock, because "
-                            + "updateStatus() is only reached through the sign");
+                            + "sign from ever being written");
+            Assert.equal(ShopStatus.OPEN, shop.getStatus(),
+                    "ten trades are available, so the shop is open - a shop's status must not "
+                            + "depend on whether anything managed to write its sign, which is what "
+                            + "it did while updateStatus() was reached only through updateSign()");
             Assert.equal("", scene.signLines()[3],
                     "and the sign the server stored is still blank");
 
@@ -478,8 +489,11 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
         // took, which is data deletion on the strength of a guess. Records
         // already orphaned stay exactly where they are; what changes is that no
         // new one is made.
+        //
+        // Sites 50..52, not 40..42: ConfigAndMetricsRows owns 40..46. See the
+        // site register on RealShop's constructor.
         scenarios.add(new Scenario("aShopStoredAgainstASignIsNotLeftBehindWhenThatSignIsBroken", () -> {
-            RealShop scene = new RealShop(this, 40);
+            RealShop scene = new RealShop(this, 50);
             scene.placeChestAndSign();
             scene.createShopByCommand("1 DIAMOND", "1 EMERALD");
 
@@ -535,7 +549,7 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
         // is asked on every sign break, so the two paths that already worked
         // have to be shown to still work. Green before the fix and after it.
         scenarios.add(new Scenario("breakingAnOrdinaryShopSignStillBehavesExactlyAsBefore", () -> {
-            RealShop shopScene = new RealShop(this, 41);
+            RealShop shopScene = new RealShop(this, 51);
             shopScene.placeChestAndSign();
             shopScene.createShopByCommand("1 DIAMOND", "1 EMERALD");
 
@@ -561,7 +575,7 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
             // A sign that is nobody's shop. The new question is asked here too -
             // it is asked of every sign - and the answer has to be that nothing
             // happens at all.
-            RealShop plain = new RealShop(this, 42);
+            RealShop plain = new RealShop(this, 52);
             plain.placeChestAndSign();
             Assert.that(!plain.get(() -> ShopType.isShop(plain.signBlock())),
                     "precondition: a blank sign is not a shop");
@@ -691,6 +705,21 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
         // row say where it came from. After DefectRows because one of those
         // rewrites config.yml.
         scenarios.addAll(IssueRows.rows(this));
+
+        // allow-sign-break, in its own file because it is a setting rather than a
+        // report: the rows turn it on, assert what an operator who turned it on
+        // gets, and put it back in a finally. Above ConfigAndMetricsRows rather
+        // than below it - these rows read a setting through the plugin's own
+        // config object, and the block below reloads that object off an edited
+        // file on disk.
+        scenarios.addAll(AllowSignBreakRows.rows(this));
+
+        // What a config save does to an operator's file, what the shop counter
+        // reports, and the two storage defects beside them. Last of all: the
+        // first of these rows stands an operator's edited config.yml up on disk
+        // and reloads the plugin's settings from it, which is a heavier version
+        // of the reason DefectRows already runs late.
+        scenarios.addAll(ConfigAndMetricsRows.rows(this));
     }
 
     /**
@@ -864,7 +893,7 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
             // Reported rather than thrown: one broken scenario must not stop the
             // rest from running, and the runner needs the result file to exist
             // in order to tell a failure from a run that never happened.
-            getLogger().warning("FAIL " + scenario.name() + ": " + describe(t));
+            recordStack(scenario.name(), t);
             return "FAIL " + describe(t);
         }
     }
@@ -879,10 +908,92 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
         }
     }
 
+    /**
+     * A failed scenario in one line, with the place the failure was thrown.
+     *
+     * <p>This used to be {@code t.getMessage()} and nothing else, and that is
+     * exactly what a CI-only failure cannot be diagnosed from: the result file is
+     * the only thing {@code ci/integration.sh} prints when a scenario fails, so a
+     * {@link ClassCastException} raised three frames inside the plugin arrived in
+     * the CI log as a sentence with no class, no method and no line number in it.
+     *
+     * <p>The cause chain is walked because {@link Sync#get} wraps whatever the
+     * server thread threw in an {@code AssertionError} whose message is the
+     * cause's {@code toString()}: the wrapper's stack is the harness waiting, and
+     * the cause's is the defect. Everything stays on ONE line - the runner counts
+     * {@code SCENARIO} lines in the result file and asserts the total, so a stack
+     * spread over forty of them would make the suite look forty scenarios longer
+     * and fail on the count instead. The whole stack goes to the console; see
+     * {@link #recordStack}.
+     */
     String describe(Throwable t) {
-        String message = t.getMessage();
-        String detail = (message == null || message.isEmpty()) ? t.toString() : message;
-        return detail.replace('\n', ' ').replace('\r', ' ');
+        StringBuilder detail = new StringBuilder();
+
+        Throwable cur = t;
+        for (int depth = 0; cur != null && depth < 8 && detail.length() < 600; depth++, cur = nextCause(cur)) {
+            if (depth > 0) detail.append(" <- caused by ");
+            String message = cur.getMessage();
+            detail.append(message == null || message.isEmpty() ? cur.toString() : message)
+                    .append(" [at ").append(origin(cur)).append(']');
+        }
+
+        return detail.toString().replace('\n', ' ').replace('\r', ' ');
+    }
+
+    /**
+     * Where a throwable came from, short enough to sit in a result line: the frame
+     * that threw, and the first frame belonging to this project so that a failure
+     * raised inside a library still names the call that reached it.
+     */
+    private static String origin(Throwable t) {
+        StackTraceElement[] frames = t.getStackTrace();
+        if (frames.length == 0) {
+            return "no stack";
+        }
+
+        StringBuilder where = new StringBuilder(frames[0].toString());
+        for (StackTraceElement frame : frames) {
+            if (frame.getClassName().startsWith("org.shanerx.tradeshop")) {
+                if (frame != frames[0]) {
+                    where.append(" <- ").append(frame);
+                }
+                break;
+            }
+        }
+        return where.toString();
+    }
+
+    /**
+     * The full stack of a failed scenario, on the console, one log record per
+     * frame.
+     *
+     * <p>One record per frame rather than one multi-line message because
+     * {@code ci/integration.sh} fails the run on any console line containing
+     * "Exception" and excludes exactly the lines this plugin prefixes with
+     * {@code FAIL }. A logger writes its prefix once, so a stack handed over as a
+     * single message would arrive as forty unprefixed lines and turn a failed
+     * scenario into a failed server.
+     */
+    void recordStack(String name, Throwable t) {
+        getLogger().warning("FAIL " + name + ": " + describe(t));
+
+        Throwable cur = t;
+        for (int depth = 0; cur != null && depth < 8; depth++, cur = nextCause(cur)) {
+            getLogger().warning("FAIL " + name + ": " + (depth == 0 ? "thrown: " : "caused by: ") + cur);
+            for (StackTraceElement frame : cur.getStackTrace()) {
+                getLogger().warning("FAIL " + name + ":     at " + frame);
+            }
+        }
+    }
+
+    /**
+     * The next link in a cause chain, or null at the end of it. Guards the
+     * self-referencing cause that a badly built exception can carry, because a
+     * harness that hangs while reporting a failure reports nothing at all.
+     */
+    private static Throwable nextCause(Throwable t) {
+        Throwable cause = t.getCause();
+        return cause == t ? null : cause;
     }
 
     void writeResult(List<String> lines) {

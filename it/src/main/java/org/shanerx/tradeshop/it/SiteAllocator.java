@@ -74,16 +74,17 @@ final class SiteAllocator {
     static final int TIER_3_CLIENT = 7;
 
     /**
-     * Every site {@code IntegrationPlugin} spends as a bare literal: the five
-     * base scenarios, the three sign-material rows, the hanging-sign-support
-     * row, the three sign-side rows and the three sign-break rows - 1 through
-     * 42, a span that also contains {@link #TIER_3_CLIENT}. Reserved wholesale
+     * Every site {@code IntegrationPlugin} spends as a bare literal - 1 through
+     * 52, a span that also contains {@link #TIER_3_CLIENT}. The highest of them
+     * is 52, and this number must stay at or above it: the block exists to hold
+     * those literals out of the cursor's reach, so a literal above it would be
+     * handed out again to the next suite that reserves. Reserved wholesale
      * here, as one block, rather than as the exact sparse set actually used:
      * that file has no {@code FIRST_SITE} of its own to grow from, so the
      * headroom this costs - a handful of indices nothing will ever claim - is
      * cheaper than teaching this class about every literal in it.
      */
-    private static final int LEGACY_TIER_2_SIZE = 42;
+    private static final int LEGACY_TIER_2_SIZE = 52;
 
     private static int cursor = 1;
     private static final Set<String> claimed = new HashSet<>();

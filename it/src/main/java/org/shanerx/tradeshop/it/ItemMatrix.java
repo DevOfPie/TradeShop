@@ -41,6 +41,7 @@ import org.shanerx.tradeshop.data.storage.DataType;
 import org.shanerx.tradeshop.item.ShopItemSide;
 import org.shanerx.tradeshop.item.ShopItemStack;
 import org.shanerx.tradeshop.item.ShopItemStackSettingKeys;
+import org.shanerx.tradeshop.player.ShopRole;
 import org.shanerx.tradeshop.shop.Shop;
 import org.shanerx.tradeshop.shop.ShopStatus;
 import org.shanerx.tradeshop.shoplocation.ShopLocation;
@@ -58,6 +59,7 @@ import java.util.Arrays;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.function.Consumer;
 
 /**
@@ -107,6 +109,12 @@ final class ItemMatrix {
      * stopped being trustworthy.
      */
     private static final SiteAllocator.Reservation SITE = SiteAllocator.reserve("ItemMatrix", 2);
+
+    /**
+     * The player the save-and-reload row's shop is shared with, so that at least
+     * one ordinary shop in this harness has somebody other than its owner on it.
+     */
+    private static final UUID SHARED_WITH = UUID.fromString("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
 
     static List<IntegrationPlugin.Scenario> rows(IntegrationPlugin plugin) {
         List<IntegrationPlugin.Scenario> rows = new ArrayList<>();
@@ -314,6 +322,15 @@ final class ItemMatrix {
             scene.run(() -> {
                 Shop shop = Shop.loadShop(where);
                 shop.setSideItems(ShopItemSide.PRODUCT, complex);
+                // An ORDINARY row's shop carries a manager, and that is the point of
+                // it being here rather than only in the rows about shop users. Every
+                // shop this harness built was owned by one player and shared with
+                // nobody, so a non-empty `managers` list was never once written to a
+                // file or read back from one - and a defect that made every shared
+                // shop unloadable sat under two units about shop loading without a
+                // single row going red. A fixture set that is uniformly the simple
+                // case is a suite that only tests the simple case.
+                shop.addUser(SHARED_WITH, ShopRole.MANAGER);
                 shop.saveShop();
             });
 
@@ -343,6 +360,8 @@ final class ItemMatrix {
                     "the lore should survive a reload");
             Assert.equal(3, loaded.getItemMeta().getEnchantLevel(Enchantment.SHARPNESS),
                     "the enchantment should survive a reload");
+            Assert.that(reloaded.getUsersUUID(ShopRole.MANAGER).contains(SHARED_WITH),
+                    "and the manager this shop was shared with should survive it too");
         }));
 
         // ------------------------------------------------------------------

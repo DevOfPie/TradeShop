@@ -72,6 +72,29 @@ final class RealShop {
     private Player owner;
 
     /**
+     * Where a scenario's ground comes from. There is no table here any more:
+     * the register this javadoc used to carry was a list every suite had to be
+     * edited into by hand, and the two defects below are both what happened
+     * when one was not. {@link SiteAllocator} hands out the ranges instead, so
+     * the agreement is kept by the runtime rather than by this comment.
+     *
+     * <p><b>A site is a namespace, and two rows on one site is not a near miss.</b>
+     * TradeShop keys every shop, chest linkage and protection entry by world name
+     * plus coordinates, and the world outlives the scenario. The second row to
+     * arrive finds whatever the first left: {@code IntegrationPlugin}'s sign-break
+     * control and {@code ConfigAndMetricsRows}' chunk-count row both took 41, the
+     * control left a sign standing that still read as a shop, and
+     * {@code Utils.createShop:515} refused the second row's shop with
+     * "existing-shop" - a red row whose message pointed at the counting code,
+     * which was correct all along. {@code IssueRows} and {@code SettingToggleRows}
+     * separately both declared 30, each with a comment naming the other suites it
+     * had checked against, and neither comment named the other.
+     *
+     * <p>A new suite reserves its own range from {@link SiteAllocator} and
+     * addresses it by offset. Nothing here can stop a suite passing a literal
+     * instead - Java cannot refuse an {@code int} for where it came from - but a
+     * suite that does ask can no longer be handed ground another suite holds.
+     *
      * @param index the scenario's patch of the world, at x = {@code index * 1000}.
      *              Every suite gets this from a {@link SiteAllocator.Reservation}
      *              rather than choosing it by hand - see {@link SiteAllocator}
@@ -125,6 +148,16 @@ final class RealShop {
      * rather than a multiple of nine. Which of them a shop can actually be built
      * on is a property of the running server's blocks, so it is asked here rather
      * than assumed.
+     *
+     * <p>Both blocks are cleared to air first, and that is load-bearing rather
+     * than tidy. {@code CraftBlock.setTypeAndData} only drops the old block
+     * entity when the block itself changes - {@code blockData.getBlock() !=
+     * old.getBlock()} - so setting {@code OAK_SIGN} over an {@code OAK_SIGN} that
+     * is already there leaves its text exactly where it was, and setting
+     * {@code CHEST} over a {@code CHEST} leaves that chest's contents and
+     * persistent data. A scene that started on ground another row had used was
+     * therefore starting on that row's sign, still reading as a shop. Placing air
+     * changes the block, so the entity goes.
      */
     void placeStorageAndSign(Material storageMaterial, Material signMaterial) {
         run(() -> {
@@ -133,6 +166,9 @@ final class RealShop {
 
             chestBlock = world.getBlockAt(x, CHEST_Y, 0);
             signBlock = world.getBlockAt(x, CHEST_Y + 1, 0);
+
+            chestBlock.setType(Material.AIR, false);
+            signBlock.setType(Material.AIR, false);
 
             // Physics off: a standing sign with nothing solid under it pops off
             // as an item the moment the server ticks the block, and the chest is
