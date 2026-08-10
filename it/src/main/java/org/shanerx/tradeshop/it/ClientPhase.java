@@ -39,8 +39,11 @@ import org.bukkit.event.inventory.InventoryOpenEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
+import org.shanerx.tradeshop.data.storage.DataStorage;
+import org.shanerx.tradeshop.data.storage.DataType;
 import org.shanerx.tradeshop.item.ShopItemSide;
 import org.shanerx.tradeshop.item.ShopItemStack;
+import org.shanerx.tradeshop.item.ShopItemStackSettingKeys;
 import org.shanerx.tradeshop.shop.Shop;
 import org.shanerx.tradeshop.shop.ShopStatus;
 import org.shanerx.tradeshop.shop.ShopType;
@@ -117,6 +120,9 @@ final class ClientPhase implements Listener, CommandExecutor {
             "aRealPlayerSessionTradesWithTheShop",
             "theEditGuiOpensAndItsClicksReachTheShop",
             "theWhatGuiShowsWhatTheShopTrades",
+            // Before the step below rather than after it, because this one needs the
+            // shop still selling diamonds out of a stocked chest.
+            "aGuiToggledComparisonChangesWhatTheShopAccepts",
             // Last on purpose: it replaces the shop's product, so every step above
             // it would be asserting a shop this one has already changed.
             "aHeldComplexItemBecomesTheProductAndRenders");
@@ -137,6 +143,25 @@ final class ClientPhase implements Listener, CommandExecutor {
         meta.addEnchant(Enchantment.SHARPNESS, 3, true);
         sword.setItemMeta(meta);
         return sword;
+    }
+
+    /**
+     * The emerald the owner bot makes its shop ask for, so that the buyer's plain
+     * ones are decided by one setting and nothing else.
+     *
+     * <p>A display name and nothing more: {@code COMPARE_NAME} is the only
+     * comparison that separates this from what the buyer is carrying, so the trade
+     * flips on that one toggle rather than on whichever check happened to run
+     * first.
+     */
+    private static final String TAGGED_COST_NAME = "Pie's Emerald";
+
+    private static ItemStack taggedCost() {
+        ItemStack emerald = new ItemStack(Material.EMERALD, 1);
+        ItemMeta meta = emerald.getItemMeta();
+        meta.setDisplayName(TAGGED_COST_NAME);
+        emerald.setItemMeta(meta);
+        return emerald;
     }
 
     /**
@@ -184,6 +209,37 @@ final class ClientPhase implements Listener, CommandExecutor {
      */
     private final List<String> openedTitles = new CopyOnWriteArrayList<>();
     private final List<String> clicks = new CopyOnWriteArrayList<>();
+
+    /**
+     * What every right-click on the shop sign did to the clicker's diamonds.
+     *
+     * <p>One entry per click, taken on either side of TradeShop's own handler:
+     * {@code ShopTradeListener.onBlockInteract} runs at {@code LOW} and performs
+     * the whole trade inside the event, so a {@code LOWEST} listener sees the
+     * inventory before it and a {@code MONITOR} listener sees it after.
+     *
+     * <p>It exists because "the trade outcome flipped" is a statement about two
+     * moments, and a step can only assert at one. Counting items at the end says
+     * how many trades happened but not <em>which</em> attempt was refused - and a
+     * toggle that broke the trade instead of enabling it would leave the same
+     * totals behind. This records the attempts in order, so the row can say the
+     * one before the GUI click moved nothing and the one after it moved a diamond.
+     */
+    private final List<SignClick> signClicks = new CopyOnWriteArrayList<>();
+
+    /** Written by the {@code LOWEST} handler and read by the {@code MONITOR} one, same event. */
+    private volatile int diamondsBeforeClick;
+
+    private record SignClick(String player, int before, int after) {
+        int moved() {
+            return after - before;
+        }
+
+        @Override
+        public String toString() {
+            return player + " " + before + "->" + after;
+        }
+    }
 
     ClientPhase(IntegrationPlugin plugin) {
         this.plugin = plugin;
@@ -320,6 +376,10 @@ final class ClientPhase implements Listener, CommandExecutor {
             // chosen to be the ones the network item codec has to carry: a name, a
             // lore line and an enchantment.
             player.getInventory().addItem(COMPLEX_PRODUCT.clone());
+            // The one emerald on this server that carries a name. Fixture in the
+            // same way the diamonds are; what is under test is that a shop asking
+            // for it refuses the buyer's plain ones until a click says otherwise.
+            player.getInventory().addItem(taggedCost());
         } else if (BUYER_BOT.equals(player.getName())) {
             // Two blocks south of the sign, looking north at it.
             where = new Location(chestBlock.getWorld(), SITE_X + 0.5, chestBlock.getY(), SITE_Z + 2.5, 0f, 0f);
@@ -369,6 +429,43 @@ final class ClientPhase implements Listener, CommandExecutor {
                 + event.getClickedBlock().getLocation().toVector()
                 + " hand=" + event.getMaterial() + " useInteracted=" + event.useInteractedBlock()
                 + " useItem=" + event.useItemInHand());
+    }
+
+    /**
+     * The clicker's diamonds as they were when the packet arrived, before
+     * TradeShop's {@code LOW} handler has had the event.
+     */
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void beforeShopSignClick(org.bukkit.event.player.PlayerInteractEvent event) {
+        if (!isShopSignClick(event)) {
+            return;
+        }
+        diamondsBeforeClick = count(event.getPlayer().getInventory().getContents(), Material.DIAMOND);
+    }
+
+    /** And as they are once every listener has run, which is once the trade has or has not happened. */
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void afterShopSignClick(org.bukkit.event.player.PlayerInteractEvent event) {
+        if (!isShopSignClick(event)) {
+            return;
+        }
+        signClicks.add(new SignClick(event.getPlayer().getName(), diamondsBeforeClick,
+                count(event.getPlayer().getInventory().getContents(), Material.DIAMOND)));
+    }
+
+    /**
+     * One record per click, not two.
+     *
+     * <p>A right-click on a block is offered to each hand in turn, so without the
+     * hand test a single click by the buyer would be filed as two attempts and the
+     * row below would be counting the server's packet handling rather than the
+     * player's actions.
+     */
+    private boolean isShopSignClick(org.bukkit.event.player.PlayerInteractEvent event) {
+        return signBlock != null
+                && event.getAction() == org.bukkit.event.block.Action.RIGHT_CLICK_BLOCK
+                && event.getHand() == org.bukkit.inventory.EquipmentSlot.HAND
+                && signBlock.equals(event.getClickedBlock());
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
@@ -488,6 +585,8 @@ final class ClientPhase implements Listener, CommandExecutor {
             case "aRealPlayerSessionTradesWithTheShop" -> aRealPlayerSessionTradesWithTheShop();
             case "theEditGuiOpensAndItsClicksReachTheShop" -> theEditGuiOpensAndItsClicksReachTheShop();
             case "theWhatGuiShowsWhatTheShopTrades" -> theWhatGuiShowsWhatTheShopTrades();
+            case "aGuiToggledComparisonChangesWhatTheShopAccepts" ->
+                    aGuiToggledComparisonChangesWhatTheShopAccepts();
             case "aHeldComplexItemBecomesTheProductAndRenders" -> aHeldComplexItemBecomesTheProductAndRenders();
             default -> throw new AssertionError("no body is written for declared step " + name);
         }
@@ -648,6 +747,130 @@ final class ClientPhase implements Listener, CommandExecutor {
                         + "and not Edit; the server opened " + openedTitles);
         Assert.that(openedTitles.indexOf("View Product Item") > openedTitles.indexOf(title),
                 "the item view must open after the what screen it is reached from");
+    }
+
+    /**
+     * A per-item comparison turned off with a click, and the trade that answer
+     * decides.
+     *
+     * <p>This is the only row in the project where the two halves meet. The tier-1
+     * matrix switches all fifteen settings off and back on by calling
+     * {@code setShopSettings} - which is the same call the GUI's own state element
+     * makes ({@code GUISubCommand.java:256}) - and the tier-2 rows prove one
+     * survives a save and a reload. Neither can say that a <em>click</em> reaches
+     * that call, that Save writes it to the shop the trade gate reads, or that a
+     * shop owner's trade changes as a result. All three need a real client in front
+     * of a real inventory, and this is the step that has one.
+     *
+     * <p>What the client did, in order: made the shop's cost a named emerald,
+     * right-clicked the sign as the buyer holding plain ones, opened
+     * {@code /tradeshop edit} and clicked through to the cost item's Compare Name
+     * toggle, saved, and right-clicked the sign again. Nothing here performed any
+     * of it.
+     *
+     * <p>The flip is read off {@link #signClicks} rather than off the final item
+     * counts, because the counts alone cannot say which of the two attempts was the
+     * one that moved anything - and a toggle that broke the trade rather than
+     * enabling it would leave exactly the same totals.
+     */
+    private void aGuiToggledComparisonChangesWhatTheShopAccepts() {
+        // The precondition that would otherwise make every assertion below vacuous:
+        // ShopItemStack.java:287 reads a per-item override only while the config
+        // says the setting is user-editable, and ShopItemStackSettingKeys.java:126
+        // answers false for a key the file does not carry. A GUI that wrote the
+        // toggle perfectly would still change nothing.
+        Assert.that(ShopItemStackSettingKeys.COMPARE_NAME.isUserEditable(),
+                "COMPARE_NAME is not user-editable on this server's config, so the GUI would not even "
+                        + "offer the toggle (GUISubCommand.java:244) and ShopItemStack.java:287 would "
+                        + "ignore it if it did");
+        Assert.that(ShopItemStackSettingKeys.COMPARE_NAME.getDefaultValue().asBoolean(),
+                "the server-wide default for COMPARE_NAME is off, so a false on the item below would "
+                        + "say nothing about the click");
+
+        Shop shop = shop();
+        Assert.that(shop != null, "the shop should still be loadable after being edited through the GUI");
+
+        List<ShopItemStack> cost = shop.getSideList(ShopItemSide.COST);
+        Assert.equal(1, cost.size(), "the cost side should hold exactly one item");
+        ItemStack asked = cost.get(0).getItemStack();
+        Assert.equal(Material.EMERALD, asked.getType(), "the shop should still be paid in emeralds");
+        Assert.that(asked.hasItemMeta() && asked.getItemMeta().hasDisplayName(),
+                "the client set the cost from the named emerald in its hand, so the shop's own item "
+                        + "carries a name - which is the difference the toggle decides");
+        Assert.equal(TAGGED_COST_NAME, asked.getItemMeta().getDisplayName(),
+                "and it is the name the harness handed over");
+
+        // 1. The setting the click wrote.
+        Assert.that(!cost.get(0).getShopSetting(ShopItemStackSettingKeys.COMPARE_NAME).asBoolean(),
+                "a real click on the Compare Name toggle should have reached the GuiStateElement at "
+                        + "GUISubCommand.java:255 and left the setting off on the shop's cost item; the "
+                        + "windows the server opened were " + openedTitles + " and the clicks were " + clicks);
+        Assert.that(cost.get(0).getShopSetting(ShopItemStackSettingKeys.COMPARE_LORE).asBoolean(),
+                "and it should have left every other setting alone - a screen that saved the whole map "
+                        + "from its own defaults would look identical until one of them mattered");
+
+        // 2. And it is on disk, not only in the shop the running plugin holds. A
+        // brand new DataStorage has an empty shopCache, so this read comes off the
+        // file the Save button wrote.
+        Shop reloaded = Sync.get(plugin, () -> new DataStorage(DataType.FLATFILE)
+                .loadShopFromSign(new ShopLocation(signBlock.getLocation())));
+        Assert.that(reloaded != null, "the shop the GUI saved should be readable off disk");
+        Assert.that(!reloaded.getSideList(ShopItemSide.COST).get(0)
+                        .getShopSetting(ShopItemStackSettingKeys.COMPARE_NAME).asBoolean(),
+                "and the toggle has to survive the write, or it lasts until the next restart");
+
+        // 3. The click chain, from the windows the server opened rather than from
+        // anything the bot said. inventorygui opens its next screen only from inside
+        // a click handler, so these titles cannot appear without a real click packet
+        // having reached one.
+        Assert.that(openedTitles.contains("Edit Costs"),
+                "a real click on the cost icon should have opened the cost list; the server opened "
+                        + openedTitles);
+        Assert.that(openedTitles.contains("Edit Cost Item"),
+                "and a click on the emerald in it should have opened that item's settings; the server "
+                        + "opened " + openedTitles);
+        Assert.that(openedTitles.indexOf("Edit Cost Item") > openedTitles.indexOf("Edit Costs"),
+                "the item screen must open after the list it is reached from, not before");
+        // A redstone block, not an emerald one, and that is the assertion rather
+        // than an accident of it. GuiStateElement flips its state from inside the
+        // click handler and redraws the window there and then, so the MONITOR
+        // listener that records these lines reads the slot AFTER the swap - it sees
+        // what the click produced, not what it found. The toggle was an emerald
+        // block (on) when the client clicked it and a redstone block (off) by the
+        // time the line was written, which is the flip itself showing up in the
+        // trail. Measured on this server; the two blocks are getBooleanItem's own
+        // (GUISubCommand.java:288).
+        Assert.that(clicks.stream().anyMatch(c -> c.contains(OWNER_BOT)
+                        && c.contains("REDSTONE_BLOCK") && c.contains("Edit Cost Item")),
+                "the client clicked the Compare Name toggle and the screen should have redrawn it as "
+                        + "the off block inside that same click; clicks were " + clicks);
+        Assert.that(clicks.stream().anyMatch(c -> c.contains(OWNER_BOT)
+                        && c.contains("ANVIL") && c.contains("Edit Cost Item")),
+                "and Save on that screen is an anvil, which is what calls Shop.updateSideItem; clicks "
+                        + "were " + clicks);
+
+        // 4. The trade, which is the only reason any of the above matters.
+        List<SignClick> attempts = signClicks.stream()
+                .filter(click -> BUYER_BOT.equals(click.player()))
+                .toList();
+        Assert.equal(3, attempts.size(),
+                "the buyer right-clicked this sign three times in this run - once to trade, once while "
+                        + "Compare Name was on, once after it was turned off. Recorded: " + attempts);
+        Assert.equal(1, attempts.get(0).moved(),
+                "the first click traded, which is what says this recorder works at all");
+        Assert.equal(0, attempts.get(1).moved(),
+                "the second must have moved nothing: the shop was asking for a named emerald, the buyer "
+                        + "held plain ones, and COMPARE_NAME was on. Recorded: " + attempts);
+        Assert.equal(1, attempts.get(2).moved(),
+                "and the third must have traded, with nothing changed but a click on a toggle. That "
+                        + "difference is the whole row. Recorded: " + attempts);
+
+        Player buyer = requireOnline(BUYER_BOT);
+        Assert.equal(2, countOf(buyer, Material.DIAMOND),
+                "so the buyer leaves with two diamonds from three attempts");
+        Assert.equal(3, countOf(buyer, Material.EMERALD), "and has paid two emeralds of its five");
+        Assert.equal(2, countInChest(Material.EMERALD), "which are both in the shop's chest");
+        Assert.equal(8, countInChest(Material.DIAMOND), "and the shop is two diamonds down");
     }
 
     /**

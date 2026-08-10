@@ -172,8 +172,13 @@ final class RealShop {
      * whole of TradeShop's own chain - permission check, {@code CommandCaller},
      * {@code CommandType} lookup, {@code SubCommand}, runner - and nothing of
      * it is stubbed.
+     *
+     * <p>Package-visible so that a scenario can run one subcommand rather than
+     * the three {@link #createShopByCommand} runs: {@code create} on its own is
+     * how a shop is left INCOMPLETE, and there is no other way to reach that
+     * state without reaching into the shop object and setting it.
      */
-    private void dispatch(String... args) {
+    void dispatch(String... args) {
         PluginCommand command = Bukkit.getPluginCommand("tradeshop");
         if (command == null) {
             throw new AssertionError("the server does not know /tradeshop, so TradeShop did not "

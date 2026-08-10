@@ -36,6 +36,7 @@ import org.bukkit.block.BlockState;
 import org.bukkit.block.Sign;
 import org.bukkit.event.block.SignChangeEvent;
 import org.bukkit.inventory.Inventory;
+import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemStack;
 import org.shanerx.tradeshop.TradeShop;
 import org.shanerx.tradeshop.data.config.Setting;
@@ -615,13 +616,37 @@ public class Shop {
     /**
      * Returns the shops inventory as a BlockState
      *
-     * @return shops inventory as BlockState
+     * <p>Null when the shop has no storage it can actually trade out of, which
+     * is not the same question as whether the location it remembers has a
+     * {@link BlockState}. <b>An air block still has one</b>, so a shop whose
+     * chest had been broken answered this call with the state of the hole and
+     * every guard built on it - {@link #hasStorage()} and therefore
+     * {@link #updateFullTradeCount()} :741 - was told the chest was still
+     * there. :746 then asked {@link #getChestAsSC()} for its inventory, which is
+     * null, because {@code ShopChest.getBlock} assigns its block only for a
+     * location that holds an inventory and {@code ShopChest.getInventory}
+     * answers null for one that does not. :748 dereferenced it:
+     * {@code Cannot invoke "Inventory.getStorageContents()" because
+     * "shopInventory" is null}.
+     *
+     * <p>So the test is the one {@code ShopChest} itself makes - is this a block
+     * this plugin reads a shop's stock out of - and the state is handed back only
+     * when it is. Whatever removed the block is irrelevant: a break, an
+     * explosion, a piston, an edit from another plugin, or an operator taking
+     * that storage type out of allowed-shops all arrive here the same way.
+     *
+     * @return shops inventory as BlockState, or null if the shop has none
      */
     public BlockState getStorage() {
         if (aSync) return null;
 
         try {
-            return getInventoryLocation().getBlock().getState();
+            Block block = getInventoryLocation().getBlock();
+
+            if (!plugin.getListManager().isInventory(block)) return null;
+
+            BlockState state = block.getState();
+            return state instanceof InventoryHolder ? state : null;
         } catch (NullPointerException npe) {
             return null;
         }
@@ -638,9 +663,9 @@ public class Shop {
     }
 
     /**
-     * Returns if the shops inventory exists
+     * Returns if the shop has storage it can trade out of
      *
-     * @return shops inventory as BlockState
+     * @return true if the shop's storage block is there and holds an inventory
      */
     public boolean hasStorage() {
         return getStorage() != null;
@@ -678,10 +703,27 @@ public class Shop {
 
     /**
      * Automatically updates a shops status if it is not CLOSED
+     *
+     * <p>A shop whose storage block is gone is {@link ShopStatus#INCOMPLETE} and
+     * stays that way until its owner puts one back. It is not closed - CLOSED is
+     * something an owner chooses and this method deliberately refuses to move a
+     * shop out of it, so a repaired shop would stay shut - and it is not
+     * removed, because the item lists on both sides are the owner's work and a
+     * block that vanished is not consent to throw them away. The repair itself
+     * is {@code ShopProtectionListener.onBlockPlace}, which re-links a storage
+     * block placed under the sign only while {@code !hasStorage()}.
      */
     public void updateStatus() {
         if (!status.equals(ShopStatus.CLOSED)) {
-            if (!isMissingItems() && (chestLoc != null || shopType.isITrade())) {
+            // hasStorage() rather than `chestLoc != null`: a shop can remember a
+            // storage location whose block is no longer there, and a shop that
+            // cannot reach its stock is incomplete rather than merely empty. An
+            // aSync shop is not attached to the world at all - getStorage()
+            // answers null for every one of them - so it keeps the weaker test
+            // instead of being reported broken for being off the main thread.
+            boolean somewhereToTradeFrom = shopType.isITrade() || (aSync ? chestLoc != null : hasStorage());
+
+            if (!isMissingItems() && somewhereToTradeFrom) {
                 if (getAvailableTrades() > 0)
                     setStatus(ShopStatus.OPEN);
                 else

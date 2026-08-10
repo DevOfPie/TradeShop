@@ -532,6 +532,12 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
         // cheaper tier would have lied about it. See ItemMatrix.
         scenarios.addAll(ItemMatrix.rows(this));
 
+        // The two per-item comparison toggles a mock cannot answer honestly. The
+        // other fourteen are switched off and back on in the tier-1 matrix; these
+        // need a BlockStateMeta and a real shop file respectively. See
+        // SettingToggleRows.
+        scenarios.addAll(SettingToggleRows.rows(this));
+
         // The reported defects and the one found beside them, in their own file
         // for the same reason as
         // the matrix: a suite rather than a scenario, and every row carries the
@@ -540,6 +546,13 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
         // recoverable, and restored in a finally, but not something to run in
         // front of rows that read the same settings.
         scenarios.addAll(DefectRows.rows(this));
+
+        // The defects reported on the upstream tracker, in their own file: they
+        // arrive with an issue number and a reporter's steps rather than out of
+        // a code review, and keeping the two provenances apart is what lets a
+        // row say where it came from. After DefectRows because one of those
+        // rewrites config.yml.
+        scenarios.addAll(IssueRows.rows(this));
     }
 
     /**

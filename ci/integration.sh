@@ -79,11 +79,12 @@ BKCL_URL=https://ci.mg-dev.eu/job/BKCommonLib/${BKCL_BUILD}/artifact/build/${BKC
 BKCL_SHA256=e7b15d76898834a0b7e8a080982a3f24c69b4a82e87a1e5ec29bce8d17045c46
 
 # A scenario that did not run is a failure, so the count is asserted here rather
-# than read out of the report the run itself produced. Twenty-two in-server
-# scenarios - six shop flows plus sixteen rows of the item-metadata matrix in
-# it/ItemMatrix.java - and seven driven by a real client; both halves declare
-# themselves before they run, and the plugin records every step the client never
-# reached as a failure by name rather than leaving the suite looking smaller.
+# than read out of the report the run itself produced. It is two halves - the
+# in-server scenarios registered by it/IntegrationPlugin.java, and eight driven by
+# a real client from it/ClientPhase.java - and both declare themselves before they
+# run, so the plugin records every step the client never reached as a failure by
+# name rather than leaving the suite looking smaller. What each change to the
+# total bought is the running log below; the totals in it are the record.
 #
 # W4 phase 1 landed and this suite is expected to be GREEN. The matrix rows that
 # were written to fail - the useMeta gate, potions, one-sided firework effects,
@@ -100,7 +101,8 @@ BKCL_SHA256=e7b15d76898834a0b7e8a080982a3f24c69b4a82e87a1e5ec29bce8d17045c46
 # W9 IS ADDING ROWS THAT ARE WRITTEN TO FAIL. They are the defects a code review
 # reported and nobody ever ran, and the branch carrying them is red on purpose:
 # the tests land before the fixes so that each one is known to have failed first.
-# A green run on this branch is the thing to distrust. See it/DefectRows.java.
+# A green run on this branch is the thing to distrust. See it/DefectRows.java,
+# and it/IssueRows.java for the same pattern applied to reports off the tracker.
 #
 # 34 -> 36 with The per-item setting, the per-item setting an older config.yml is missing.
 # 36 -> 37 with The chest linkage, the chest linkage that removeChest cannot remove.
@@ -110,10 +112,23 @@ BKCL_SHA256=e7b15d76898834a0b7e8a080982a3f24c69b4a82e87a1e5ec29bce8d17045c46
 # 41 -> 42 with The cost side, the cost side a shop loses the first time it is read off disk.
 #          That one was not in the review: it was noticed as `cost: []` in a shop file
 #          left behind by a run, characterised afterwards, and pinned here.
-# 42 -> 45 with The sign side: a header written on the BACK of a sign, the player who has
+#
+# 42 -> 44 with the two per-item comparison toggles a mock cannot answer honestly:
+#          the shulker box's contents, which need a BlockStateMeta, and a toggle read
+#          back off a real shop file. The other fourteen settings are switched off and
+#          back on in the tier-1 matrix. See it/SettingToggleRows.java.
+# 44 -> 45 with the client-driven half of the same thing: a comparison turned off by
+#          clicking it in the edit GUI, and the trade that answer decides. That one is
+#          a tier-3 STEP rather than an in-server scenario - it needs a hand to click
+#          with - so it raises the client's count from seven to eight.
+# 45 -> 46 with The removed chest, upstream #160's shop that has lost its storage block.
+# 46 -> 49 with The editable sign, upstream #152: the five shop states a sign has to be
+#          protected in, the trade and the ordinary sign that protecting it must not cost,
+#          and the plain-Bukkit PlayerSignOpenEvent that refuses the editor - named, so
+#          that a return to the Paper-only guard fails rather than passes quietly.
+# 49 -> 52 with The sign side: a header written on the BACK of a sign, the player who has
 #          to be told it did nothing, and the front-side control that must not move.
-#          The first two are written to FAIL until the fix lands.
-EXPECTED_SCENARIOS=45
+EXPECTED_SCENARIOS=52
 
 # Tier 3. The client is not optional: a run that boots a server, plays nothing
 # and exits 0 is the vacuous pass this project treats as the worst possible
