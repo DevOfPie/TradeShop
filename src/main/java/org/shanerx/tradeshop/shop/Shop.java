@@ -379,8 +379,23 @@ public class Shop {
 
         map.put("shopLoc", shopLoc.serialize());
         map.put("owner", owner.serialize());
-        map.put("managers", managers);
-        map.put("members", members);
+        // Copied into lists rather than handed over as the Sets they are held in,
+        // and that is a correctness fix rather than defensive copying. This map is
+        // not only written to a file: ShopConfiguration.save puts it straight into
+        // the storage layer's IN-MEMORY document, which is what the next reader of
+        // that chunk is answered out of until the file is re-read. deserialize
+        // below reads both keys with getSerializableList, whose first act is
+        // `(List) get(key)` - so a Set read back before the reload threw
+        //
+        //   java.lang.ClassCastException: class java.util.HashSet cannot be cast
+        //   to class java.util.List
+        //
+        // out of Shop.deserialize, and DataStorage.getMatchingShopsInChunk is the
+        // only caller of that reached from ShopUser.findProximityShop, which is
+        // /tradeshop find. A list is what the file holds and what the reader
+        // wants, so it is what is stored.
+        map.put("managers", new ArrayList<>(managers));
+        map.put("members", new ArrayList<>(members));
         map.put("shopType", shopType.name());
         map.put("product", products);
         map.put("cost", costs);
@@ -485,6 +500,20 @@ public class Shop {
 
     /**
      * Saves the shop to file
+     *
+     * <p>{@link #updateStatus()} runs before the shop is handed to storage, not
+     * after. {@link #updateSign()} recomputes status on its way to line four
+     * ({@code updateSignLines} :592), and it used to be the only thing that did -
+     * from <em>after</em> the write - so what reached the file was the status the
+     * shop had before this save. A shop built from the chat bar was stored
+     * {@code INCOMPLETE}, the value the field starts at, however complete it
+     * actually was.
+     *
+     * <p>That value is read rather than recomputed by everything that comes at a
+     * shop through storage: {@code DataStorage.getMatchingShopsInChunk} loads with
+     * {@code loadASync}, which fixes a shop up without touching its status, and
+     * {@code ShopUser.findProximityShop} is {@code /tradeshop find}. So the sign in
+     * the world and the answer that command gives disagreed about the same shop.
      */
     public void saveShop() {
         if (aSync) {
@@ -493,8 +522,9 @@ public class Shop {
         }
 
         updateFullTradeCount();
+        updateStatus();
         plugin.getDataStorage().saveShop(this);
-        if (!aSync) updateSign();
+        updateSign();
         updateUserFiles();
     }
 

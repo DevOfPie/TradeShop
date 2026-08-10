@@ -80,8 +80,8 @@ final class AllowSignBreakRows {
     private AllowSignBreakRows() {
     }
 
-    /** These rows' patch of the world. See the site register on {@link RealShop}. */
-    private static final int FIRST_SITE = 60;
+    /** These rows' patch of the world, 70..75. See the site register on {@link RealShop}. */
+    private static final int FIRST_SITE = 70;
 
     /** The shop's stock. Neither material is the shop's cost, which is the point. */
     private static final int DIAMONDS = 12;

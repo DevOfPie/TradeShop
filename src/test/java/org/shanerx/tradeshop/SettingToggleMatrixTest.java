@@ -158,6 +158,62 @@ class SettingToggleMatrixTest {
                         + "server default");
     }
 
+    /**
+     * The third state of the same switch: the config has no answer at all.
+     *
+     * <p>{@code shop-per-item-settings.<key>} has two children and they are read by
+     * two methods that treat a hole differently.
+     * {@code ShopItemStackSettingKeys.getDefaultValue():116-119} falls back to the
+     * value compiled into the enum, because a hole there used to throw inside the
+     * trade gate. {@code isUserEditable():125-127} hands straight to
+     * {@code Setting.getMappedBoolean}, and {@code getBoolean} answers {@code false}
+     * for a key that is not there.
+     *
+     * <p>{@code false} is not "no answer" for this key. It is
+     * {@code user-editable: false}, which is a deliberate decision an operator makes
+     * and the one thing that makes {@code ShopItemStack.java:287} throw away a shop
+     * owner's per-item override. So a hole does not degrade to the default, it
+     * quietly enacts the opposite of it: every per-item setting on the server stops
+     * being editable, every override already written onto an item stops being
+     * consulted, and nothing is logged. Two comparisons that were switched off go
+     * back on, and the shop starts refusing items it used to accept.
+     *
+     * <p>The hole is punched in memory rather than in a file, for the same reason
+     * {@code it/DefectRows.aMissingPerItemSettingDoesNotThrowInsideTheTradeGate}
+     * does: this is about the guard, not about the boot-time repair, and the two
+     * have to be able to fail and be fixed independently.
+     */
+    @Test
+    void aPerItemSettingMissingFromTheConfigIsStillEditableRatherThanLocked() {
+        String subKey = ShopItemStackSettingKeys.COMPARE_LORE.getConfigName() + ".user-editable";
+        Object wasEditable = Setting.SHOP_PER_ITEM_SETTINGS.getMappedObject(subKey);
+
+        try {
+            Setting.SHOP_PER_ITEM_SETTINGS.setMappedValue(subKey, null);
+            assertTrue(Setting.SHOP_PER_ITEM_SETTINGS.getMappedObject(subKey) == null,
+                    "precondition: the config has no answer for whether COMPARE_LORE is editable");
+
+            assertTrue(ShopItemStackSettingKeys.COMPARE_LORE.isUserEditable(),
+                    "a per-item setting the config says nothing about must keep the plugin's own "
+                            + "default, which is editable - ShopItemStackSettingKeys.java:125-127 reads "
+                            + "getBoolean on a missing key and gets false, which is the value an "
+                            + "operator writes to LOCK the setting");
+
+            ShopItemStack loreOff = withSetting(sword(), ShopItemStackSettingKeys.COMPARE_LORE, false);
+            assertFalse(loreOff.getShopSetting(ShopItemStackSettingKeys.COMPARE_LORE).asBoolean(),
+                    "so an override written onto an item is still consulted");
+            assertTrue(loreOff.isSimilar(sword(meta -> meta.setLore(List.of("first line", "changed")))),
+                    "and the shop still accepts the item its owner said it should - a hole in the "
+                            + "config must not switch a comparison back on behind their back");
+        } finally {
+            Setting.SHOP_PER_ITEM_SETTINGS.setMappedValue(subKey, wasEditable);
+        }
+
+        assertTrue(ShopItemStackSettingKeys.COMPARE_LORE.isUserEditable(),
+                "the hole must be filled again, or every later row in this JVM is asserting the "
+                        + "server default");
+    }
+
     // ------------------------------------------------------------------
     // The families. One base item, and one variant per attribute it carries.
     // ------------------------------------------------------------------

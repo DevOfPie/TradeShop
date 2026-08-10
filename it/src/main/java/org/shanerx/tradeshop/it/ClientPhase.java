@@ -556,7 +556,7 @@ final class ClientPhase implements Listener, CommandExecutor {
             plugin.getLogger().info("PASS " + name);
         } catch (Throwable t) {
             verdict = "FAIL " + plugin.describe(t);
-            plugin.getLogger().warning("FAIL " + name + ": " + plugin.describe(t));
+            plugin.recordStack(name, t);
         }
 
         record(name, verdict);

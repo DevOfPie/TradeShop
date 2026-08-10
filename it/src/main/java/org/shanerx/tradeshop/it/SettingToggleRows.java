@@ -60,8 +60,12 @@ final class SettingToggleRows {
     private SettingToggleRows() {
     }
 
-    /** Clear of tier 2's 1..5, the matrix's 10..11, DefectRows' 20..27 and tier 3's 7000. */
-    private static final int FIRST_SITE = 30;
+    /**
+     * These rows' patch of the world. Registered on {@code RealShop}'s
+     * constructor, which is the only list of who owns what; this used to be 30
+     * and so is {@link IssueRows}, which nothing was checking.
+     */
+    private static final int FIRST_SITE = 60;
 
     static List<IntegrationPlugin.Scenario> rows(IntegrationPlugin plugin) {
         List<IntegrationPlugin.Scenario> rows = new ArrayList<>();
