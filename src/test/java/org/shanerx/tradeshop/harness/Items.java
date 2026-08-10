@@ -4,9 +4,13 @@ import org.bukkit.Bukkit;
 import org.bukkit.Color;
 import org.bukkit.FireworkEffect;
 import org.bukkit.Material;
+import org.bukkit.NamespacedKey;
+import org.bukkit.attribute.AttributeModifier;
 import org.bukkit.enchantments.Enchantment;
+import org.bukkit.inventory.EquipmentSlotGroup;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.BookMeta;
+import org.bukkit.inventory.meta.BundleMeta;
 import org.bukkit.inventory.meta.Damageable;
 import org.bukkit.inventory.meta.EnchantmentStorageMeta;
 import org.bukkit.inventory.meta.FireworkMeta;
@@ -117,5 +121,38 @@ public final class Items {
 
     public static ItemStack damaged(Material material, int damage) {
         return with(material, meta -> ((Damageable) meta).setDamage(damage));
+    }
+
+    /**
+     * A bundle holding {@code contents}.
+     *
+     * <p>Unlike a shulker box, this one is honest here: MockBukkit ships a real
+     * {@code BundleMetaMock}, so {@code getItemMeta(BUNDLE)} is a
+     * {@link org.bukkit.inventory.meta.BundleMeta} and the comparator's bundle
+     * branch runs rather than throwing on the cast.
+     *
+     * <p>What is <em>not</em> honest here is how finely two bundles can be told
+     * apart. The comparator compares contents with {@code List.remove}, which is
+     * {@code ItemStack.equals}, and {@code ItemStackMock.equals} answers true for a
+     * plain diamond against a named one - measured, not assumed. So rows here
+     * differ their contents by material or amount, which the mock does separate;
+     * a bundle whose contents differ only in metadata is asserted in
+     * {@code it/ItemMatrix.java} instead.
+     */
+    public static ItemStack bundle(ItemStack... contents) {
+        return with(Material.BUNDLE, meta -> ((BundleMeta) meta).setItems(Arrays.asList(contents)));
+    }
+
+    /**
+     * An attack-damage modifier, under one fixed key so that two of them differ
+     * only in the number they carry.
+     *
+     * <p>The key matters: {@code addAttributeModifier} appends rather than
+     * replaces, so a "same modifier, different amount" pair has to be built from
+     * two separate metas rather than by editing one.
+     */
+    public static AttributeModifier attackDamage(double amount) {
+        return new AttributeModifier(new NamespacedKey("tradeshop", "test-attack-damage"),
+                amount, AttributeModifier.Operation.ADD_NUMBER, EquipmentSlotGroup.HAND);
     }
 }
