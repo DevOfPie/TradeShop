@@ -691,6 +691,12 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
         // row say where it came from. After DefectRows because one of those
         // rewrites config.yml.
         scenarios.addAll(IssueRows.rows(this));
+
+        // allow-sign-break, in its own file because it is a setting rather than a
+        // report: the rows turn it on, assert what an operator who turned it on
+        // gets, and put it back in a finally. Last, so that a row which somehow
+        // left it on cannot reach anything above it.
+        scenarios.addAll(AllowSignBreakRows.rows(this));
     }
 
     /**
