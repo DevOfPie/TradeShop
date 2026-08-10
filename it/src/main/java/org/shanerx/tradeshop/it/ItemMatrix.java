@@ -550,7 +550,7 @@ final class ItemMatrix {
     // Builders
     // ------------------------------------------------------------------
 
-    private static ItemStack with(Material material, Consumer<ItemMeta> edit) {
+    static ItemStack with(Material material, Consumer<ItemMeta> edit) {
         ItemStack stack = new ItemStack(material);
         ItemMeta meta = stack.getItemMeta();
         edit.accept(meta);
@@ -558,11 +558,11 @@ final class ItemMatrix {
         return stack;
     }
 
-    private static ItemStack named(Material material, String name) {
+    static ItemStack named(Material material, String name) {
         return with(material, meta -> meta.setDisplayName(name));
     }
 
-    private static ItemStack book(String title, String author, String... pages) {
+    static ItemStack book(String title, String author, String... pages) {
         return with(Material.WRITTEN_BOOK, meta -> {
             BookMeta book = (BookMeta) meta;
             book.setTitle(title);

@@ -258,6 +258,43 @@ async function clickIcon (bot, itemName, what) {
   }
 }
 
+/**
+ * Clicks the toggle that belongs to a named setting icon, one row below it.
+ *
+ * This is the only slot arithmetic in the harness, and it is here rather than
+ * spread across the run for that reason. GUISubCommand's ITEM_LAYOUT is
+ *
+ *     "u ggggggg"     the setting's icon      - slots 2..8
+ *     "j hhhhhhh"     the toggle for it       - slots 11..17
+ *     "ap cbs na"
+ *
+ * so the two groups are filled in step with each other and the toggle for a
+ * setting sits exactly nine slots below the icon that names it. Finding the icon
+ * by item rather than by position is what keeps the rest of it robust: which
+ * settings an item has depends on the item, so the icon's own slot moves.
+ */
+async function clickToggleUnder (bot, iconName, what) {
+  const window = bot.currentWindow
+  if (!window) throw new Failed(`no window is open, so the ${what} toggle cannot be clicked`)
+
+  const icon = window.slots.findIndex((item, index) =>
+    index < window.inventoryStart && item && item.name === iconName)
+  if (icon < 0) {
+    throw new Failed(`no ${iconName} in the open window, so ${what} is not on this page. Slots: ` +
+      window.slots.slice(0, window.inventoryStart).map((i) => (i ? i.name : '-')).join(','))
+  }
+
+  const toggle = icon + 9
+  const under = window.slots[toggle]
+  say('clicking the', what, 'toggle in slot', String(toggle),
+    '- it is', under ? under.name : 'empty', 'under the', iconName, 'in slot', String(icon))
+  try {
+    await bot.clickWindow(toggle, 0, 0)
+  } catch (e) {
+    say('clickWindow rejected (the harness decides whether the click landed):', e.message || String(e))
+  }
+}
+
 // ---------------------------------------------------------------------------
 // The run
 // ---------------------------------------------------------------------------
@@ -363,6 +400,58 @@ async function play () {
   await owner.waitForTicks(5)
 
   await step(owner, 'theWhatGuiShowsWhatTheShopTrades')
+
+  // ---- A comparison switched off with a click, and the trade it decides. ---
+  //
+  // The shop is made to ask for the one named emerald on this server. The buyer
+  // is carrying plain ones, so the two differ in exactly one attribute and one
+  // setting decides the trade. Then: try to pay (must be refused), turn Compare
+  // Name off through the edit GUI, try again (must go through). Nothing here
+  // checks either outcome - it/ClientPhase.java reads them off the inventories on
+  // either side of TradeShop's own handler.
+  await hold(owner, 'emerald')
+  await face(owner, signPos)
+  say('typing /tradeshop setCost while holding',
+    owner.heldItem ? owner.heldItem.name + ' x' + owner.heldItem.count : 'nothing')
+  owner.chat('/tradeshop setCost')
+  await owner.waitForTicks(10)
+
+  await face(buyer, signPos)
+  say('right-clicking the sign as', BUYER, '- the shop wants a named emerald and this one is plain')
+  await buyer.activateBlock(buyer.blockAt(signPos))
+  await buyer.waitForTicks(10)
+
+  await face(owner, signPos)
+  opening = nextWindow(owner, 'the edit menu')
+  owner.chat('/tradeshop edit')
+  await opening
+
+  opening = nextWindow(owner, 'the cost list')
+  await clickIcon(owner, 'gold_nugget', 'Edit Shop Costs')
+  await opening
+
+  opening = nextWindow(owner, "the cost item's settings")
+  await clickIcon(owner, 'emerald', 'the cost item')
+  await opening
+
+  // No window is awaited here: a GuiStateElement redraws the screen it is on
+  // rather than opening a new one, so waiting for one would time out on a click
+  // that landed.
+  await clickToggleUnder(owner, 'name_tag', 'Compare Name')
+  await owner.waitForTicks(5)
+
+  opening = nextWindow(owner, 'the cost list again, via goBack')
+  await clickIcon(owner, 'anvil', 'Save Changes')
+  await opening
+  owner.closeWindow(owner.currentWindow)
+  await owner.waitForTicks(10)
+
+  await face(buyer, signPos)
+  say('right-clicking the sign as', BUYER, 'again - same emerald, one setting different')
+  await buyer.activateBlock(buyer.blockAt(signPos))
+  await buyer.waitForTicks(10)
+
+  await step(owner, 'aGuiToggledComparisonChangesWhatTheShopAccepts')
 
   // ---- A complex item, out of a real hand and back onto a real screen. -----
   //
