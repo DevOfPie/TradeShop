@@ -339,6 +339,27 @@ public class DataStorage {
     }
 
     private final Map<String, JsonShopData> chunkDataCache = new HashMap<>();
+
+    /**
+     * The one handle on a chunk's shops, cached per chunk.
+     *
+     * <p><b>The instance that is cached is the instance that is returned.</b> It
+     * used to cache one and hand back a second, freshly constructed from the same
+     * file, so the first caller after a cache miss worked on a copy nothing else
+     * could see. Every write that caller made - a save, or a remove - landed on
+     * disk and never on the cached object, and the next reader was answered out of
+     * the cached object.
+     *
+     * <p>That is not theoretical and it is not only a wasted file read.
+     * {@code ChunkUnloadListener} drops a chunk's entry on every unload, so any
+     * shop operation is one unload away from being the first call after a miss. A
+     * shop removed by that call is written out of its file and stays in memory,
+     * where the next {@link #loadShopFromSign} finds it and hands it back alive -
+     * and anything that then saves it writes it back to disk. Measured on Paper
+     * 1.21.11 build 132 while proving that breaking a sign removes the shop stored
+     * against it: the chunk's file was left holding {@code {}} and the shop still
+     * loaded.
+     */
     protected ShopConfiguration getShopData(ShopChunk chunk) {
         if (dataType == DataType.FLATFILE) {
             String serializedChunk = chunk.serialize();
@@ -346,7 +367,7 @@ public class DataStorage {
                 return chunkDataCache.get(serializedChunk);
             JsonShopData data = new JsonShopData(chunk);
             chunkDataCache.put(serializedChunk, data);
-            return new JsonShopData(chunk);
+            return data;
         }
 
         throw new NotImplementedException("Data storage type " + dataType + " has not been implemented yet.");
