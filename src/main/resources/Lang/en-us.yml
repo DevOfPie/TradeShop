@@ -97,7 +97,7 @@ setting:
       allow-toggle-status:
         pre-comment: "Can players toggle view of involved shops?"
       allow-sign-break:
-        pre-comment: "Should we allow anyone to destroy a shops sign?\n WARNING: when this is true ANY player can destroy ANY shop, including one they do not own.\n The shop is deleted; its storage block and everything in it are left exactly as they are.\n Only the sign is broken, so nothing drops and no stock changes hands. This applies to every\n break, the owner's own included - the setting is not a permission check."
+        pre-comment: "Should we allow anyone to destroy a shops sign?"
       allow-chest-break:
         pre-comment: "Should we allow anyone to destroy a shops storage?"
         post-comment: "\n"
