@@ -122,8 +122,23 @@ public enum ShopItemStackSettingKeys {
         return displayItem;
     }
 
+    /**
+     * Whether a shop owner may override this setting on an item.
+     *
+     * <p>Falls back to editable when the config file has no answer, for the same
+     * reason {@link #getDefaultValue()} falls back to the value compiled into this
+     * enum - and with more at stake, because {@code false} here is not an absent
+     * answer, it is a decision. {@code user-editable: false} is how an operator pins
+     * a comparison server-wide, and {@code ShopItemStack.java:287} enforces it by
+     * refusing to read the item's own value at all. Reading a hole as {@code false},
+     * which is what {@code getBoolean} does for a key that is not there, therefore
+     * enacted the opposite of the default: every per-item override on the server
+     * stopped being consulted, shops went back to comparing things their owners had
+     * switched off, and nothing was logged.
+     */
     public boolean isUserEditable() {
-        return Setting.SHOP_PER_ITEM_SETTINGS.getMappedBoolean(getConfigName() + "." + userEditableKey);
+        Object configured = Setting.SHOP_PER_ITEM_SETTINGS.getMappedObject(getConfigName() + "." + userEditableKey);
+        return configured == null || new ObjectHolder<>(configured).asBoolean();
     }
 
     public String getConfigName() {

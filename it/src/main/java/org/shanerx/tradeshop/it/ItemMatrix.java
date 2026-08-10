@@ -101,7 +101,10 @@ final class ItemMatrix {
     private ItemMatrix() {
     }
 
-    /** The site coordinates these rows use, kept clear of tier 2's 1..5 and tier 3's 7000. */
+    /**
+     * These rows' patch of the world, 10..11. Registered on {@code RealShop}'s
+     * constructor, which is the only list of who owns what.
+     */
     private static final int FIRST_SITE = 10;
 
     static List<IntegrationPlugin.Scenario> rows(IntegrationPlugin plugin) {

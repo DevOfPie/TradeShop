@@ -131,7 +131,11 @@ BKCL_SHA256=e7b15d76898834a0b7e8a080982a3f24c69b4a82e87a1e5ec29bce8d17045c46
 # 52 -> 54 with The broken sign: a shop stored against a sign whose text no longer reads as
 #          one, which today outlives the only block that could have found it again, and the
 #          control that the ordinary sign break - a shop's and a plain sign's - does not move.
-EXPECTED_SCENARIOS=54
+# 54 -> 60 with The config and metrics rows: an operator's tuned settings surviving a boot
+#          that writes the file, the shop counter that always answered zero, the chunk
+#          data handed out twice, the double chest unlinked by halves, the status stored
+#          before it was recomputed, and a missing per-item key read as a lock.
+EXPECTED_SCENARIOS=60
 
 # Tier 3. The client is not optional: a run that boots a server, plays nothing
 # and exits 0 is the vacuous pass this project treats as the worst possible
@@ -492,8 +496,18 @@ $(cat "$MARKER")"
 $(cat "$MARKER")"
 
     failures=$(grep '^SCENARIO .* FAIL' "$MARKER" || true)
+    # The stacks come out of the console rather than the result file: a result line
+    # is counted and asserted against EXPECTED_SCENARIOS, so it has to stay one
+    # line, and one line is not enough to find a fault by. This block is why - a
+    # ClassCastException raised inside the plugin used to reach CI as its message
+    # and nothing else, which named no file and no line and could not be worked
+    # from at all. IntegrationPlugin.recordStack writes one console record per
+    # frame, each carrying the "FAIL " prefix that check_console excludes.
     [ -z "$failures" ] || die "scenarios failed:
-$failures"
+$failures
+
+and the stacks they were thrown from:
+$(grep '\[TradeShopIT\] FAIL ' "$CONSOLE" 2>/dev/null || echo '(the console recorded none)')"
 
     say "$ran/$EXPECTED_SCENARIOS scenarios passed:"
     sed 's/^/[integration]   /' "$MARKER"
