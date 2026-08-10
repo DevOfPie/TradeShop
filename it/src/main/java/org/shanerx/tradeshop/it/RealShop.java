@@ -83,6 +83,7 @@ final class RealShop {
      *   <tr><td>30..39</td><td>{@link IssueRows}</td></tr>
      *   <tr><td>40..46</td><td>{@link ConfigAndMetricsRows}</td></tr>
      *   <tr><td>60</td><td>{@link SettingToggleRows}</td></tr>
+     *   <tr><td>70..75</td><td>{@link AllowSignBreakRows}</td></tr>
      * </table>
      *
      * <p><b>A site is a namespace, and two rows on one site is not a near miss.</b>

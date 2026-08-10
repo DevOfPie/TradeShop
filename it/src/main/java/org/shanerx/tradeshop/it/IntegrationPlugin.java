@@ -706,6 +706,14 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
         // rewrites config.yml.
         scenarios.addAll(IssueRows.rows(this));
 
+        // allow-sign-break, in its own file because it is a setting rather than a
+        // report: the rows turn it on, assert what an operator who turned it on
+        // gets, and put it back in a finally. Above ConfigAndMetricsRows rather
+        // than below it - these rows read a setting through the plugin's own
+        // config object, and the block below reloads that object off an edited
+        // file on disk.
+        scenarios.addAll(AllowSignBreakRows.rows(this));
+
         // What a config save does to an operator's file, what the shop counter
         // reports, and the two storage defects beside them. Last of all: the
         // first of these rows stands an operator's edited config.yml up on disk
