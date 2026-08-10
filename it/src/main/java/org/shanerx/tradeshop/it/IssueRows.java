@@ -16,18 +16,25 @@
 
 package org.shanerx.tradeshop.it;
 
+import io.papermc.paper.event.player.PlayerOpenSignEvent;
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
 import org.bukkit.block.BlockState;
+import org.bukkit.entity.Player;
+import org.bukkit.event.Event;
+import org.bukkit.event.block.Action;
 import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
+import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.plugin.RegisteredListener;
 import org.shanerx.tradeshop.item.ShopItemSide;
 import org.shanerx.tradeshop.shop.Shop;
 import org.shanerx.tradeshop.shop.ShopStatus;
+import org.shanerx.tradeshop.shop.ShopType;
 import org.shanerx.tradeshop.shoplocation.ShopLocation;
 
 import java.util.ArrayList;
@@ -37,10 +44,27 @@ import java.util.List;
  * The rows for defects reported on the upstream tracker.
  *
  * <h2>Why they are here and not in {@code src/test}</h2>
- * Each turns on something a mock does not have. See the comment above each row
- * for the specific reason; the shared one is that these are reports about what a
- * player did to a real world, and the harness that answers them has to be able
- * to break a block and put it back.
+ * Each turns on something a mock does not have:
+ *
+ * <ul>
+ *   <li><b>#160</b> is a {@code BlockState} for air. The whole defect is that
+ *       {@code getBlock().getState()} answers a live object for a block that is
+ *       not there, so a mock that answered null - or threw - would hide it. The
+ *       repair a shop owner takes runs inside a real {@code BlockPlaceEvent}
+ *       listener as well.</li>
+ *   <li><b>#152</b> is about which of two guards is doing the work, and one of
+ *       them is a Paper-only event that exists only on a Paper classpath.
+ *       "Is a shop sign protected without it" cannot be asked anywhere a real
+ *       server is not running.</li>
+ * </ul>
+ *
+ * <h2>What is not claimed</h2>
+ * There is no Spigot server in this harness and BuildTools is out of scope, so
+ * nothing below proves how Spigot behaves. What the #152 rows prove is
+ * TradeShop's own decision: that a right-click on a recognised shop sign leaves
+ * the interact event's block result at {@code DENY} whatever state the shop is
+ * in, taken through {@code PlayerInteractEvent} - an API every server this
+ * plugin supports has - rather than through the Paper-only event.
  */
 final class IssueRows {
 
@@ -187,7 +211,202 @@ final class IssueRows {
                     scene.onServer(() -> Shop.loadShop(where).getStatus() == ShopStatus.OPEN));
         }));
 
+        // ------------------------------------------------------------------
+        // #152, first half: a shop sign stays editable.
+        //
+        // There are two guards and only one of them is portable.
+        // PaperShopProtectionListener:42 cancels PlayerOpenSignEvent, which is
+        // Paper-only API with no Spigot equivalent. The other is
+        // ShopTradeListener:150's e.setCancelled(true), and it sits BELOW every
+        // early return in that method: no shop (:88), a storage block that is
+        // gone (:108), an illegal item (:114), CLOSED (:126), INCOMPLETE (:129),
+        // OUT_OF_STOCK (:132) and a cancelled PlayerPrepareTradeEvent (:148) all
+        // return before it. So the protection a player actually gets depends on
+        // what the shop happens to be doing at the time.
+        //
+        // Asserted as the interact event's BLOCK result rather than as
+        // isCancelled(), because the block result is what the server acts on: a
+        // sign opens its editor out of the block's own interaction, and a DENY
+        // there is what stops it. It is also narrower than setCancelled(true),
+        // which would deny the item in hand as well and stop a player placing a
+        // block against a shop sign.
+        //
+        // WHAT THIS DOES NOT CLAIM: there is no Spigot server in this harness
+        // and BuildTools is out of scope, so nothing here proves how Spigot
+        // behaves. What it proves is TradeShop's own decision, taken through
+        // PlayerInteractEvent - an API every server this plugin supports has -
+        // rather than through the Paper-only event.
+        // ------------------------------------------------------------------
+        rows.add(new IntegrationPlugin.Scenario("aShopSignIsProtectedFromEditingInEveryShopState", () -> {
+            // OUT_OF_STOCK: a complete shop with an empty chest, and the state
+            // this was measured leaking in.
+            RealShop outOfStock = new RealShop(plugin, FIRST_SITE + 1);
+            outOfStock.placeChestAndSign();
+            outOfStock.createShopByCommand("1 DIAMOND", "1 EMERALD");
+            assertState(outOfStock, ShopStatus.OUT_OF_STOCK);
+            assertSignDenied(outOfStock, "an out-of-stock shop sign, which ShopTradeListener:132 "
+                    + "returns from before the setCancelled at :150");
+
+            // INCOMPLETE: /tradeshop create and nothing else.
+            RealShop incomplete = new RealShop(plugin, FIRST_SITE + 2);
+            incomplete.placeChestAndSign();
+            incomplete.dispatch("create");
+            assertState(incomplete, ShopStatus.INCOMPLETE);
+            assertSignDenied(incomplete, "a shop whose owner has not set its items yet - :129");
+
+            // CLOSED: the owner shut it deliberately.
+            RealShop closed = new RealShop(plugin, FIRST_SITE + 3);
+            closed.placeChestAndSign();
+            closed.createShopByCommand("1 DIAMOND", "1 EMERALD");
+            Shop closedShop = closed.get(() -> Shop.loadShop(new ShopLocation(closed.signBlock().getLocation())));
+            closed.run(() -> {
+                closedShop.setStatus(ShopStatus.CLOSED);
+                closedShop.saveShop();
+            });
+            assertState(closed, ShopStatus.CLOSED);
+            assertSignDenied(closed, "a shop its owner has closed - :126");
+
+            // A storage block that is gone. #160's guard is what gets the
+            // listener as far as :108 rather than throwing on the way, and this
+            // is the state it lands in once it does.
+            RealShop noChest = new RealShop(plugin, FIRST_SITE + 4);
+            noChest.placeChestAndSign();
+            noChest.createShopByCommand("1 DIAMOND", "1 EMERALD");
+            noChest.run(() -> noChest.chestBlock().setType(Material.AIR, false));
+            assertSignDenied(noChest, "a shop whose storage block has been removed - :108");
+
+            // OPEN, which is the one state the fallback does cover, so that a
+            // red run reads as "these states leak" rather than "signs are
+            // unprotected".
+            RealShop open = new RealShop(plugin, FIRST_SITE + 5);
+            open.placeChestAndSign();
+            open.createShopByCommand("1 DIAMOND", "1 EMERALD");
+            open.stockShop(new ItemStack(Material.DIAMOND, 10));
+            open.closeChestAsOwner();
+            Assert.eventually(15_000, "precondition: the shop is open",
+                    open.onServer(() -> Shop.loadShop(new ShopLocation(open.signBlock().getLocation()))
+                            .getStatus() == ShopStatus.OPEN));
+            assertSignDenied(open, "an open shop sign");
+        }));
+
+        // ------------------------------------------------------------------
+        // #152, and the reason it needs care: protecting a sign must not cost
+        // the things a player is supposed to be able to do.
+        //
+        // The trade is the one that would break. ShopTradeListener returns
+        // immediately at :69 on a block result of DENY, so a protection handler
+        // registered at a lower priority than that listener would silently stop
+        // every shop on the server from trading while looking like it had only
+        // shut a sign. The click below has to do both: pay the buyer, and leave
+        // the sign shut.
+        //
+        // The GUI and the admin tools are not asserted here because neither is
+        // reached by clicking a sign - both are /tradeshop subcommands, and
+        // tier 3 drives the edit GUI with a real client - so a deny on a sign
+        // interaction cannot touch them.
+        // ------------------------------------------------------------------
+        rows.add(new IntegrationPlugin.Scenario("protectingAShopSignCostsNeitherTheTradeNorAnOrdinarySign", () -> {
+            RealShop scene = new RealShop(plugin, FIRST_SITE + 6);
+            scene.placeChestAndSign();
+            scene.createShopByCommand("1 DIAMOND", "1 EMERALD");
+            scene.stockShop(new ItemStack(Material.DIAMOND, 10));
+            scene.closeChestAsOwner();
+
+            Assert.eventually(15_000, "precondition: the shop is open before anyone trades with it",
+                    scene.onServer(() -> Shop.loadShop(new ShopLocation(scene.signBlock().getLocation()))
+                            .getStatus() == ShopStatus.OPEN));
+
+            Player buyer = scene.buyerHolding(new ItemStack(Material.EMERALD, 5));
+            Event.Result result = clickSign(scene, buyer);
+
+            Assert.eventually(15_000, "the buyer to be holding a diamond",
+                    scene.onServer(() -> scene.rawCountOf(buyer, Material.DIAMOND) == 1));
+
+            Assert.equal(1, scene.countOf(buyer, Material.DIAMOND),
+                    "the click that shuts the sign must still be the click that trades");
+            Assert.equal(4, scene.countOf(buyer, Material.EMERALD), "and the buyer must still pay");
+            Assert.equal(Event.Result.DENY, result, "and the same click must leave the sign shut");
+
+            // An ordinary sign is nobody's shop and has to be left entirely
+            // alone, or this protection is a server-wide ban on writing signs.
+            RealShop plain = new RealShop(plugin, FIRST_SITE + 7);
+            plain.placeChestAndSign();
+            Assert.that(!plain.get(() -> ShopType.isShop(plain.signBlock())),
+                    "precondition: a blank sign is not a shop");
+            Assert.equal(Event.Result.ALLOW, clickSign(plain, plain.owner()),
+                    "a sign that is not a shop sign must be left exactly as the server found it");
+        }));
+
+        // ------------------------------------------------------------------
+        // #152, second half: whether the Paper listener is registered at all is
+        // decided from a version STRING.
+        //
+        // TradeShop.java:159-161 registers PaperShopProtectionListener when
+        // getServer().getVersion().toLowerCase().contains("paper"). That string
+        // is the server's own build description and nothing promises it names
+        // the software. What actually decides whether the listener CAN be
+        // registered is whether io.papermc.paper.event.player.PlayerOpenSignEvent
+        // is on the classpath, and that is a question the JVM answers exactly.
+        //
+        // This server has the class, so on this server the listener has to be
+        // registered. Whether it is today is measured rather than assumed, and
+        // the version string is logged beside the answer.
+        // ------------------------------------------------------------------
+        rows.add(new IntegrationPlugin.Scenario("paperSignProtectionIsRegisteredByCapabilityNotByVersionString", () -> {
+            Bukkit.getLogger().info("[harness] server name " + Bukkit.getServer().getName()
+                    + ", version string " + Bukkit.getServer().getVersion());
+
+            boolean registered = false;
+            for (RegisteredListener listener : PlayerOpenSignEvent.getHandlerList().getRegisteredListeners()) {
+                if ("TradeShop".equals(listener.getPlugin().getName())) registered = true;
+            }
+
+            Assert.that(registered,
+                    "PlayerOpenSignEvent is on this server's classpath, so TradeShop must be "
+                            + "listening for it - TradeShop.java:159-161 decides that from "
+                            + "getServer().getVersion().toLowerCase().contains(\"paper\") rather than "
+                            + "from whether the class is there, and this server's version string is \""
+                            + Bukkit.getServer().getVersion() + "\"");
+        }));
+
         return rows;
+    }
+
+    // ------------------------------------------------------------------
+    // Helpers
+    // ------------------------------------------------------------------
+
+    /**
+     * Right-clicks the scene's sign and answers what the block result was once
+     * every plugin had run.
+     *
+     * <p>The block result, not {@code isCancelled()}: a fresh
+     * {@link PlayerInteractEvent} over a non-null block starts at {@code ALLOW},
+     * and {@code isCancelled()} only becomes true once the item in hand has been
+     * denied as well. What stops a sign from opening its editor is the block
+     * half on its own.
+     */
+    private static Event.Result clickSign(RealShop scene, Player player) {
+        return scene.get(() -> {
+            PlayerInteractEvent event = new PlayerInteractEvent(player, Action.RIGHT_CLICK_BLOCK, null,
+                    scene.signBlock(), BlockFace.NORTH);
+            Bukkit.getPluginManager().callEvent(event);
+            return event.useInteractedBlock();
+        });
+    }
+
+    private static void assertSignDenied(RealShop scene, String what) {
+        Assert.that(scene.get(() -> ShopType.isShop(scene.signBlock())),
+                "precondition: the block reads as a shop sign before it is clicked (" + what + ")");
+        Assert.equal(Event.Result.DENY, clickSign(scene, scene.owner()),
+                "a right-click on " + what + " must leave the block interaction denied, or the "
+                        + "server goes on to open the sign for editing");
+    }
+
+    private static void assertState(RealShop scene, ShopStatus expected) {
+        Assert.equal(expected,
+                scene.get(() -> Shop.loadShop(new ShopLocation(scene.signBlock().getLocation())).getStatus()),
+                "precondition: the shop is " + expected + " before its sign is clicked");
     }
 
     /**

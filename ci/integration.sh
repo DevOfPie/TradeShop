@@ -112,7 +112,10 @@ BKCL_SHA256=e7b15d76898834a0b7e8a080982a3f24c69b4a82e87a1e5ec29bce8d17045c46
 #          That one was not in the review: it was noticed as `cost: []` in a shop file
 #          left behind by a run, characterised afterwards, and pinned here.
 # 42 -> 43 with The removed chest, upstream #160's shop that has lost its storage block.
-EXPECTED_SCENARIOS=43
+# 43 -> 46 with The editable sign, upstream #152: the five shop states a sign has to be
+#          protected in, the trade and the ordinary sign that protecting it must not cost,
+#          and the version string the Paper-only half of the guard is registered from.
+EXPECTED_SCENARIOS=46
 
 # Tier 3. The client is not optional: a run that boots a server, plays nothing
 # and exits 0 is the vacuous pass this project treats as the worst possible
