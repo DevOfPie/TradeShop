@@ -26,6 +26,7 @@ import org.shanerx.tradeshop.TradeShop;
 import org.shanerx.tradeshop.data.config.Setting;
 import org.shanerx.tradeshop.item.ShopItemStack;
 import org.shanerx.tradeshop.shop.Shop;
+import org.shanerx.tradeshop.shop.ShopChest;
 import org.shanerx.tradeshop.shoplocation.ShopLocation;
 import org.shanerx.tradeshop.utils.Utils;
 import org.shanerx.tradeshop.utils.objects.ObjectHolder;
@@ -196,6 +197,46 @@ final class DefectRows {
                     Setting.SHOP_PER_ITEM_SETTINGS.setMappedValue("compare-name.default", name);
                 });
             }
+        }));
+
+        // ------------------------------------------------------------------
+        // The chest-linkage defect. Unlinking a chest never unlinks it.
+        //
+        // LinkageConfiguration.removeChest:70 calls
+        // Map<String, Object>.remove(chestLocation) with a ShopLocation.
+        // Map.remove takes Object, so it compiles; no String key is ever equal to
+        // a ShopLocation, so it is always a miss. Every other method on that
+        // interface keys by chestLocation.toString() - addLinkage:53-56,
+        // getLinkedShop:44-45 - and this one does not.
+        //
+        // The entry therefore outlives the chest. DataStorage.removeChestLinkage:317
+        // is the route a player takes by breaking half of a shop's storage
+        // (ShopProtectionListener.java:317), and Shop.removeStorage:617 the route
+        // taken by unlinking the whole of it.
+        // ------------------------------------------------------------------
+        rows.add(new IntegrationPlugin.Scenario("unlinkingAChestRemovesItsLinkageEntry", () -> {
+            RealShop scene = new RealShop(plugin, FIRST_SITE + 2);
+            scene.placeChestAndSign();
+            scene.createShopByCommand("1 DIAMOND", "1 EMERALD");
+
+            ShopLocation chest = scene.get(() -> new ShopLocation(scene.chestBlock().getLocation()));
+
+            Assert.that(scene.get(() -> tradeShop().getDataStorage().getChestLinkage(chest)) != null,
+                    "precondition: creating the shop linked the chest under the sign to it");
+
+            scene.run(() -> tradeShop().getDataStorage().removeChestLinkage(chest));
+
+            Assert.that(scene.get(() -> tradeShop().getDataStorage().getChestLinkage(chest)) == null,
+                    "a chest that has been unlinked must stop being linked - "
+                            + "LinkageConfiguration.removeChest:70 passes a ShopLocation to a "
+                            + "Map<String,String>.remove, which is a legal call that can never match the "
+                            + "String key addLinkage:56 wrote");
+
+            // And the block goes on reading as a shop chest for exactly as long as
+            // the entry does, which is what the hopper and protection paths key on
+            // (ShopChest.isShopChest:75, ShopProtectionListener.java:117).
+            Assert.that(!scene.get(() -> ShopChest.isShopChest(scene.chestBlock())),
+                    "and an unlinked chest must stop reading as a shop chest to every path that asks");
         }));
 
         return rows;

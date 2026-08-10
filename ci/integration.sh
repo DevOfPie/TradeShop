@@ -103,7 +103,8 @@ BKCL_SHA256=e7b15d76898834a0b7e8a080982a3f24c69b4a82e87a1e5ec29bce8d17045c46
 # A green run on this branch is the thing to distrust. See it/DefectRows.java.
 #
 # 34 -> 36 with The per-item setting, the per-item setting an older config.yml is missing.
-EXPECTED_SCENARIOS=36
+# 36 -> 37 with The chest linkage, the chest linkage that removeChest cannot remove.
+EXPECTED_SCENARIOS=37
 
 # Tier 3. The client is not optional: a run that boots a server, plays nothing
 # and exits 0 is the vacuous pass this project treats as the worst possible
