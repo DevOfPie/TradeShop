@@ -100,7 +100,8 @@ BKCL_SHA256=e7b15d76898834a0b7e8a080982a3f24c69b4a82e87a1e5ec29bce8d17045c46
 # W9 IS ADDING ROWS THAT ARE WRITTEN TO FAIL. They are the defects a code review
 # reported and nobody ever ran, and the branch carrying them is red on purpose:
 # the tests land before the fixes so that each one is known to have failed first.
-# A green run on this branch is the thing to distrust. See it/DefectRows.java.
+# A green run on this branch is the thing to distrust. See it/DefectRows.java,
+# and it/IssueRows.java for the same pattern applied to reports off the tracker.
 #
 # 34 -> 36 with The per-item setting, the per-item setting an older config.yml is missing.
 # 36 -> 37 with The chest linkage, the chest linkage that removeChest cannot remove.
@@ -110,7 +111,8 @@ BKCL_SHA256=e7b15d76898834a0b7e8a080982a3f24c69b4a82e87a1e5ec29bce8d17045c46
 # 41 -> 42 with The cost side, the cost side a shop loses the first time it is read off disk.
 #          That one was not in the review: it was noticed as `cost: []` in a shop file
 #          left behind by a run, characterised afterwards, and pinned here.
-EXPECTED_SCENARIOS=42
+# 42 -> 43 with The removed chest, upstream #160's shop that has lost its storage block.
+EXPECTED_SCENARIOS=43
 
 # Tier 3. The client is not optional: a run that boots a server, plays nothing
 # and exits 0 is the vacuous pass this project treats as the worst possible
