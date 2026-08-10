@@ -274,27 +274,42 @@ public class DataStorage {
         return matchingShops;
     }
 
+    /**
+     * How many shops this world has on disk.
+     *
+     * <p>Counted on the calling thread and returned. It used to hand the counting to
+     * {@code runTaskAsynchronously} and then return {@code count.get()} on the next
+     * line, before the scheduler had given that task a thread - so the answer was
+     * zero, every time, and the {@link AtomicInteger} the task later filled in was
+     * never read by anybody. Its one caller is {@code VarManager.startup}, whose
+     * total feeds the bStats "shop-counter" chart, so the figure this plugin has
+     * been publishing about itself counted no shop that existed before the server
+     * started.
+     *
+     * <p>The thread hop was worth keeping and has moved to that caller, which is
+     * where a decision about blocking startup belongs: a method that says it returns
+     * a count cannot also decide not to have one yet. Reading the world's name here
+     * rather than inside a task keeps that call on the thread that owns the world.
+     */
     public int getShopCountInWorld(World world) {
         String worldName = world.getName();
 
-        AtomicInteger count = new AtomicInteger();
-        Bukkit.getScheduler().runTaskAsynchronously(TradeShop.getPlugin(), () -> {
-            switch (dataType) {
-                case FLATFILE:
-                    File folder = new File(TradeShop.getPlugin().getDataFolder().getAbsolutePath() + File.separator + "Data" + File.separator + worldName);
-                    if (folder.exists() && folder.listFiles() != null) {
-                        for (File file : folder.listFiles()) {
-                            if (file.getName().contains(worldName) && file.getName().endsWith(".json"))
-                                count.addAndGet(new JsonShopData(ShopChunk.deserialize(file.getName().replace(".json", ""))).size());
-                        }
-                    }
-                    break;
-                case SQLITE:
-                    //TODO add SQLITE support
-                    throw new NotImplementedException("SQLITE for getShopCountInWorld has not been implemented yet.");
-            }
-        });
-        return count.get();
+        if (dataType != DataType.FLATFILE) {
+            //TODO add SQLITE support
+            throw new NotImplementedException("Data storage type " + dataType + " for getShopCountInWorld has not been implemented yet.");
+        }
+
+        File folder = new File(TradeShop.getPlugin().getDataFolder().getAbsolutePath() + File.separator + "Data" + File.separator + worldName);
+        File[] chunkFiles = folder.exists() ? folder.listFiles() : null;
+        if (chunkFiles == null) return 0;
+
+        int count = 0;
+        for (File file : chunkFiles) {
+            if (file.getName().contains(worldName) && file.getName().endsWith(".json"))
+                count += new JsonShopData(ShopChunk.deserialize(file.getName().replace(".json", ""))).size();
+        }
+
+        return count;
     }
 
     public PlayerSetting loadPlayer(UUID uuid) {
@@ -339,6 +354,7 @@ public class DataStorage {
     }
 
     private final Map<String, JsonShopData> chunkDataCache = new HashMap<>();
+
     protected ShopConfiguration getShopData(ShopChunk chunk) {
         if (dataType == DataType.FLATFILE) {
             String serializedChunk = chunk.serialize();
