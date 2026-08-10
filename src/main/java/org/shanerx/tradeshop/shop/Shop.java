@@ -737,7 +737,7 @@ public class Shop {
     }
 
     private int countItems(List<ShopItemStack> countItems, ItemStack[] storageContents) {
-        Inventory storage = Bukkit.createInventory(null, storageContents.length);
+        Inventory storage = Bukkit.createInventory(null, Utils.scratchInventorySize(storageContents.length));
         storage.setContents(storageContents);
 
         int totalCount = 0, currentCount = 0;
