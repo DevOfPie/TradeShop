@@ -66,6 +66,10 @@ global-options:
   # Can players toggle view of involved shops?
   allow-toggle-status: true
   # Should we allow anyone to destroy a shops sign?
+  # WARNING: when this is true ANY player can destroy ANY shop, including one they do not own.
+  # The shop is deleted; its storage block and everything in it are left exactly as they are.
+  # Only the sign is broken, so nothing drops and no stock changes hands. This applies to every
+  # break, the owner's own included - the setting is not a permission check.
   allow-sign-break: false
   # Should we allow anyone to destroy a shops storage?
   allow-chest-break: false

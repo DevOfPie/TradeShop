@@ -280,7 +280,10 @@ public class ShopProtectionListener implements Listener {
         Shop shop = null;
 
         if (ShopType.isShop(block)) {
-            if (Setting.ALLOW_SIGN_BREAK.getBoolean()) return;
+            if (Setting.ALLOW_SIGN_BREAK.getBoolean()) {
+                removeShopWhoseSignAnyoneMayBreak(block);
+                return;
+            }
             shop = Shop.loadShop((Sign) block.getState());
             if (shop == null)
                 return;
@@ -425,6 +428,64 @@ public class ShopProtectionListener implements Listener {
                 + stored.getShopLocationAsSL() + ", whose sign was broken while its text no longer "
                 + "read as a shop. Its storage block, if any, has been unlinked and its contents "
                 + "left untouched.", DebugLevels.PROTECTION);
+    }
+
+    /**
+     * Takes the shop down when {@code allow-sign-break} has already decided the
+     * break is going to happen.
+     *
+     * <p>{@link #onBlockBreak} returns on that setting before every check that
+     * would otherwise have protected the sign, and it used to return before
+     * {@link Shop#remove()} as well. The block became air and the record
+     * survived, unreachable in every direction - no trade, because
+     * {@code ShopTradeListener} reads the sign; no repair, because
+     * {@link Shop#getShopSign()} is the same test, so {@link Shop#updateSign()}
+     * can never write the header back; no removal, because every removal path
+     * starts from a sign - while it went on counting against its owner's limit
+     * and against {@code MAX_SHOPS_PER_CHUNK} and holding its storage block
+     * linked. That is the same orphan {@link #removeShopStoredAgainst} closes,
+     * reached through a setting rather than through a rewritten sign.
+     *
+     * <h2>The record and the linkage, and nothing else</h2>
+     * The shop record goes and the chest linkage goes with it. Nothing here
+     * touches the storage block or anything inside it.
+     *
+     * <p>Only the sign was broken. The storage block is a different block,
+     * standing, unbroken, and full of the owner's items; a plugin that emptied it
+     * would be inventing a drop the server never asked for. Dropping the contents
+     * of a block is the server's job and it does it for the block that actually
+     * broke - which here is a sign, and the server pops that as an item the way
+     * it does for any sign, because the break is not cancelled. So what an
+     * operator gets is a deleted shop and an ordinary chest, still holding
+     * everything it held a moment before. If they want the items too, they break
+     * the chest, and {@code allow-chest-break} is the setting that governs that.
+     *
+     * <h2>{@link PlayerShopDestroyEvent} is not fired</h2>
+     * Same reason as {@link #removeShopStoredAgainst}, and one more that is
+     * specific to this path. The event is cancellable and its
+     * {@code destroyBlock()} defaults to {@code false}, so a listener that merely
+     * cancelled it would reach {@code event.setCancelled(false)} - the block
+     * still breaks, and the record it just refused to delete outlives it. And the
+     * operator has said in config.yml that anyone may break a shop's sign; an
+     * event that can refuse the break contradicts the setting it is running
+     * under. Nothing was fired on this path before this change either, so no
+     * consumer loses anything it was getting.
+     */
+    private void removeShopWhoseSignAnyoneMayBreak(Block signBlock) {
+        Shop shop = Shop.loadShop((Sign) signBlock.getState());
+
+        if (shop == null) return;
+
+        // Shop.remove takes the chest linkage with it - DataStorage.removeShop
+        // drops every linkage entry pointing at this shop - and purges the shop
+        // from its users' files, so it stops counting against their limits. The
+        // storage block is left alone, contents and all: it is not the block
+        // being broken, and its contents are the owner's items.
+        shop.remove();
+
+        plugin.getDebugger().log("ShopProtectionListener: allow-sign-break is on, so the shop at "
+                + shop.getShopLocationAsSL() + " was removed with its sign. Its storage block has "
+                + "been unlinked and is otherwise untouched, contents included.", DebugLevels.PROTECTION);
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
