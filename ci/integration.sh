@@ -128,7 +128,10 @@ BKCL_SHA256=e7b15d76898834a0b7e8a080982a3f24c69b4a82e87a1e5ec29bce8d17045c46
 #          that a return to the Paper-only guard fails rather than passes quietly.
 # 49 -> 52 with The sign side: a header written on the BACK of a sign, the player who has
 #          to be told it did nothing, and the front-side control that must not move.
-EXPECTED_SCENARIOS=52
+# 52 -> 54 with The broken sign: a shop stored against a sign whose text no longer reads as
+#          one, which today outlives the only block that could have found it again, and the
+#          control that the ordinary sign break - a shop's and a plain sign's - does not move.
+EXPECTED_SCENARIOS=54
 
 # Tier 3. The client is not optional: a run that boots a server, plays nothing
 # and exits 0 is the vacuous pass this project treats as the worst possible
