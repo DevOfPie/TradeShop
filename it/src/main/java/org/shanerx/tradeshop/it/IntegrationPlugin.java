@@ -21,6 +21,7 @@ import org.bukkit.ChatColor;
 import org.bukkit.Material;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
+import org.bukkit.block.sign.Side;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -31,6 +32,7 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.shanerx.tradeshop.TradeShop;
+import org.shanerx.tradeshop.data.config.Message;
 import org.shanerx.tradeshop.shop.Shop;
 import org.shanerx.tradeshop.shop.ShopChest;
 import org.shanerx.tradeshop.shop.ShopStatus;
@@ -330,6 +332,115 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
             Assert.equal(9, scene.countInChest(Material.DIAMOND), "the shop should have one fewer diamond");
         }));
 
+        // ------------------------------------------------------------------
+        // Which SIDE of the sign a shop is written on.
+        //
+        // A sign has had two faces since 1.20 and SignChangeEvent has carried
+        // which one is being edited for just as long. TradeShop never asks:
+        // ShopCreateListener.onSignChange:54-58 copies the event's lines onto a
+        // Sign snapshot with the front-side setLine and hands that to
+        // ShopType.isShop, so a header typed on the BACK is read as a shop
+        // header, a shop is built, saved and decorated - and then nothing can
+        // ever find it again, because every path that looks a shop up reads the
+        // FRONT: ShopType.isShop(Block):60-66 asks the block state, which
+        // answers from the front side, and that is the call
+        // ShopTradeListener:79, ShopProtectionListener:179,280 and
+        // Shop.getShopSign:518 all go through.
+        //
+        // MEASURED on this server before the fix, from a back-side [Trade]
+        // header over a chest:
+        //   ShopType.isShop(block)=false   storedShop=Trade
+        //   frontLines=[PROBEKEEP one, keep two, keep three, ]
+        //   backLines=[[Trade], 1 Diamond, 1 Emerald, <Out Of Stock>]
+        //
+        // The three rows below are one subject and two controls: the back-side
+        // edit must create nothing, the player must be told so, and the front
+        // side must go on working exactly as it did. Tier 1 could hold a
+        // narrower version of the first - MockBukkit has a SignSideMock - but
+        // not the part that matters most, which is that the shop was written to
+        // a real data store and read back out of it by a path that cannot see
+        // it.
+        // ------------------------------------------------------------------
+        scenarios.add(new Scenario("aHeaderOnTheBackOfASignCreatesNoShopAtAll", () -> {
+            RealShop scene = new RealShop(this, 16);
+            scene.placeChestAndSign();
+
+            scene.createShopOn(Side.BACK, ShopType.TRADE.toHeader(), "1 DIAMOND", "1 EMERALD");
+
+            ShopLocation where = scene.get(() -> new ShopLocation(scene.signBlock().getLocation()));
+
+            // The defect itself, and the reason it is worse than a refusal: the
+            // shop is real, it is on disk, it counts against its owner's limit
+            // and against the chunk's - and no click, command or protection
+            // check can reach it, because all of them read the front.
+            Assert.that(scene.get(() -> Shop.loadShop(where)) == null,
+                    "a shop header written on the BACK of a sign must not store a shop. Every "
+                            + "path that finds a shop again reads the FRONT, so a shop stored "
+                            + "from a back-side edit is saved, decorated and unreachable - the "
+                            + "player who made it sees a correct-looking shop that refuses to "
+                            + "work, with nothing to say why");
+
+            // And the other half of the trap: the back face was decorated to
+            // look like a working shop, status line and all.
+            Assert.that(!strip(ShopStatus.OUT_OF_STOCK.getLine()).equals(strip(lastSignEventLines()[3])),
+                    "and the back of the sign must not be dressed as a working shop - a status "
+                            + "line is what a player reads to mean the shop will trade");
+        }));
+
+        scenarios.add(new Scenario("aBackSideHeaderTellsThePlayerWhyNothingHappened", () -> {
+            RealShop scene = new RealShop(this, 17);
+            scene.placeChestAndSign();
+
+            scene.createShopOn(Side.BACK, ShopType.TRADE.toHeader(), "1 DIAMOND", "1 EMERALD");
+
+            List<String> told = scene.ownerWasTold();
+
+            // Named by its key in the messages file rather than by the enum
+            // constant, so that this row compiles and fails against the code as
+            // it stands today. The key is what the fix has to add; an operator's
+            // existing messages.yml gets it written on the next boot by
+            // ConfigManager.setDefaults.
+            String refusal = messageText("shop-sign-front-only");
+            Assert.that(refusal != null && !refusal.isEmpty(),
+                    "the messages file must carry a 'shop-sign-front-only' line, or there is "
+                            + "nothing to tell a player who wrote a shop header on the back of a "
+                            + "sign, and a shop that silently fails to appear is the same defect "
+                            + "in a new coat");
+
+            Assert.that(told.stream().anyMatch(line -> line.contains(refusal)),
+                    "the player must be told why the sign did not become a shop. They were "
+                            + "told: " + told);
+
+            Assert.that(told.stream().noneMatch(line -> line.contains(strip(Message.SUCCESSFUL_SETUP.toString()))),
+                    "and must not be told the shop was set up, which is what the plugin says "
+                            + "today while storing something nobody can use. They were told: " + told);
+        }));
+
+        // The control. It must be green before the fix and after it: refusing a
+        // back-side header must not narrow ordinary shop creation by a hair.
+        // Same constructor as the row above, same site layout, same items - the
+        // only difference between the two is the Side.
+        scenarios.add(new Scenario("aHeaderOnTheFrontOfASignStillCreatesAShop", () -> {
+            RealShop scene = new RealShop(this, 18);
+            scene.placeChestAndSign();
+
+            scene.createShopOn(Side.FRONT, ShopType.TRADE.toHeader(), "1 DIAMOND", "1 EMERALD");
+
+            Shop shop = scene.get(() -> Shop.loadShop(new ShopLocation(scene.signBlock().getLocation())));
+
+            Assert.that(shop != null, "a front-side header must still create a shop");
+            Assert.equal(ShopType.TRADE, shop.getShopType(), "and it is still a trade shop");
+            Assert.equal(scene.owner().getUniqueId(), shop.getOwner().getUUID(),
+                    "and the signer still owns it");
+            Assert.equal(scene.get(() -> scene.chestBlock().getLocation()), shop.getInventoryLocation(),
+                    "and it is still linked to the chest under the sign");
+            Assert.equal(strip(ShopStatus.OUT_OF_STOCK.getLine()), strip(lastSignEventLines()[3]),
+                    "and the front of the sign is still decorated with the shop's status");
+            Assert.that(scene.ownerWasTold().stream()
+                            .anyMatch(line -> line.contains(strip(Message.SUCCESSFUL_SETUP.toString()))),
+                    "and the player is still told the shop was set up");
+        }));
+
         // The signs a shop can go on. These three are here rather than at tier 1
         // because tier 1 cannot express them: MockBukkit's material set is its
         // 1.21.1 line, so pale oak - added in 1.21.2 - does not exist there at
@@ -494,6 +605,22 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
     }
 
     /**
+     * One line of the running plugin's messages file, as a player would see it.
+     *
+     * <p>By key rather than through the {@code Message} enum on purpose: a row
+     * that names a constant the fix has not added yet does not compile, and a
+     * row that cannot be run against the broken code is a row nobody has seen
+     * fail.
+     *
+     * @return null if the messages file has no such key
+     */
+    private static String messageText(String key) {
+        TradeShop tradeShop = (TradeShop) Bukkit.getPluginManager().getPlugin("TradeShop");
+        String raw = tradeShop.getMessageManager().getConfig().getString(key);
+        return raw == null ? null : strip(tradeShop.getMessageManager().colour(raw));
+    }
+
+    /**
      * Scenarios run a second after the server reports itself loaded, and off the
      * server thread.
      *
@@ -518,8 +645,21 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
     @EventHandler(priority = EventPriority.MONITOR)
     public void afterSignChange(SignChangeEvent event) {
         lastSignEventLines = event.getLines().clone();
-        getLogger().info("sign event lines after every plugin ran: " + Arrays.toString(event.getLines())
+        getLogger().info("sign event lines after every plugin ran on the " + event.getSide()
+                + ": " + Arrays.toString(event.getLines())
                 + " cancelled=" + event.isCancelled());
+    }
+
+    /**
+     * What every plugin left on the last sign edit; see {@link #afterSignChange}.
+     *
+     * <p>The only way a scenario can read a sign edit this harness fired itself:
+     * the block is written by the packet handler that fires the event, so a
+     * synthetic event leaves the block blank whatever the plugins did to the
+     * lines.
+     */
+    String[] lastSignEventLines() {
+        return lastSignEventLines.clone();
     }
 
     @EventHandler

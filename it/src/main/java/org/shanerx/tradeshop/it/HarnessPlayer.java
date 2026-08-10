@@ -34,7 +34,11 @@ import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * The one thing a real server will not give a headless harness: a player.
@@ -60,7 +64,26 @@ import java.util.UUID;
  */
 final class HarnessPlayer {
 
+    /**
+     * Everything TradeShop has said to each player, by UUID.
+     *
+     * <p>Chat is not decoration: it is the whole of what a player is told when
+     * the plugin refuses to do something, and "the shop silently did not appear"
+     * is a defect of exactly the same shape as "the shop appeared and does not
+     * work". A scenario that can only see the world cannot tell the two apart,
+     * so what was said is kept as well as what was done.
+     *
+     * <p>Concurrent both ways round: written on the server thread while the
+     * scenario thread reads it.
+     */
+    private static final Map<UUID, List<String>> SAID = new ConcurrentHashMap<>();
+
     private HarnessPlayer() {
+    }
+
+    /** Every line this player has been sent, colour stripped, oldest first. */
+    static List<String> heardBy(Player player) {
+        return SAID.getOrDefault(player.getUniqueId(), List.of());
     }
 
     /**
@@ -117,7 +140,9 @@ final class HarnessPlayer {
                     // A scenario that fails for a reason the plugin already
                     // stated should not need a second run to find out why.
                     case "sendMessage", "sendRawMessage" -> {
-                        Bukkit.getLogger().info("[harness] " + name + " was told: " + chat(args));
+                        String said = chat(args);
+                        SAID.computeIfAbsent(uuid, who -> new CopyOnWriteArrayList<>()).add(said);
+                        Bukkit.getLogger().info("[harness] " + name + " was told: " + said);
                         yield null;
                     }
                     // Client-side refreshes have nowhere to go either, and

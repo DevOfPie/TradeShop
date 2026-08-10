@@ -126,7 +126,9 @@ BKCL_SHA256=e7b15d76898834a0b7e8a080982a3f24c69b4a82e87a1e5ec29bce8d17045c46
 #          protected in, the trade and the ordinary sign that protecting it must not cost,
 #          and the plain-Bukkit PlayerSignOpenEvent that refuses the editor - named, so
 #          that a return to the Paper-only guard fails rather than passes quietly.
-EXPECTED_SCENARIOS=49
+# 49 -> 52 with The sign side: a header written on the BACK of a sign, the player who has
+#          to be told it did nothing, and the front-side control that must not move.
+EXPECTED_SCENARIOS=52
 
 # Tier 3. The client is not optional: a run that boots a server, plays nothing
 # and exits 0 is the vacuous pass this project treats as the worst possible
