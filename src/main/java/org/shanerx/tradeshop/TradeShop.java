@@ -156,8 +156,28 @@ public class TradeShop extends JavaPlugin {
         pm.registerEvents(new SuccessfulTradeEventListener(this), this);
         pm.registerEvents(new ChunkUnloadListener(this), this);
 
-        if (getServer().getVersion().toLowerCase().contains("paper")) {
+        // Asked of the classpath, not of a version string. The listener's only
+        // reason to exist is io.papermc.paper.event.player.PlayerOpenSignEvent,
+        // which is Paper-only API, and registering it where that class is absent
+        // is a NoClassDefFoundError out of PluginManager reading the handler's
+        // parameter types. So the question is whether the class is there, and
+        // the JVM answers that one exactly.
+        //
+        // getServer().getVersion() used to be asked instead, and it is the
+        // server's own build description rather than a statement of which
+        // software is running: Paper 1.21.11 build 132 answers
+        // "1.21.11-132-c5eb079 (MC: 1.21.11)", which contains no "paper" at
+        // all. This listener was therefore not registered on the very servers it
+        // was written for. Measured on that build; see it/IssueRows.java.
+        //
+        // It is a second line either way. ShopProtectionListener.onShopSignInteract
+        // holds a shop sign shut on every server, including this one.
+        try {
+            Class.forName("io.papermc.paper.event.player.PlayerOpenSignEvent");
             pm.registerEvents(new PaperShopProtectionListener(), this);
+        } catch (ClassNotFoundException notPaper) {
+            getLogger().info("[TradeShop] PlayerOpenSignEvent is not on this server's classpath, "
+                    + "so shop signs are protected by the interact guard alone.");
         }
 
         getCommand("tradeshop").setExecutor(new CommandCaller(this));

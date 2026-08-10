@@ -34,6 +34,7 @@ import org.bukkit.block.data.Directional;
 import org.bukkit.block.data.type.HangingSign;
 import org.bukkit.block.data.type.WallHangingSign;
 import org.bukkit.entity.Player;
+import org.bukkit.event.Event;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
@@ -382,6 +383,46 @@ public class ShopProtectionListener implements Listener {
         if (e.isCancelled()) return;
 
         if (ShopType.isShop(e.getBlock())) e.setCancelled(true);
+    }
+
+    /**
+     * A shop sign does not open for editing, whatever the shop is doing.
+     *
+     * <p>{@link #onSignChange} above already refuses the finished edit of a shop
+     * sign, for everyone including an admin, so a sign editor that opens over
+     * one is a screen whose result is thrown away. What was missing was anything
+     * that stopped it opening on a server without Paper's
+     * {@code PlayerOpenSignEvent}, which is the only other guard and has no
+     * Spigot equivalent. The fallback was
+     * {@code ShopTradeListener}'s {@code e.setCancelled(true)}, and that line
+     * sits below every early return in the method: no shop, a storage block that
+     * is gone, an illegal item, CLOSED, INCOMPLETE, OUT_OF_STOCK and a cancelled
+     * {@code PlayerPrepareTradeEvent} all return before it. So a player got
+     * protection or not depending on what the shop happened to be doing.
+     *
+     * <h2>Priority, which is the whole of the care this needs</h2>
+     * {@code HIGHEST}, and it has to be: {@code ShopTradeListener} runs at
+     * {@code LOW} and returns immediately when the block result is already
+     * {@code DENY}. Denying before it would stop every shop on the server from
+     * trading while looking like it had only shut a sign. Running after it means
+     * the trade has already happened, and this only closes what the trade
+     * listener left open.
+     *
+     * <h2>The block result, not setCancelled</h2>
+     * Cancelling a {@link PlayerInteractEvent} denies the item in hand as well,
+     * which would stop a player placing a block against a shop sign. What opens
+     * a sign editor is the block's own interaction, so that is the only half
+     * denied here.
+     *
+     * <p>Right-clicks only. A left-click on a sign is a break, and breaking is
+     * {@link #onBlockBreak}'s decision rather than this one's.
+     */
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onShopSignInteract(PlayerInteractEvent e) {
+        if (e.getAction() != Action.RIGHT_CLICK_BLOCK) return;
+        if (e.useInteractedBlock() == Event.Result.DENY) return;
+
+        if (ShopType.isShop(e.getClickedBlock())) e.setUseInteractedBlock(Event.Result.DENY);
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
