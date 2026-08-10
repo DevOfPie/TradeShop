@@ -114,7 +114,8 @@ BKCL_SHA256=e7b15d76898834a0b7e8a080982a3f24c69b4a82e87a1e5ec29bce8d17045c46
 # 42 -> 43 with The removed chest, upstream #160's shop that has lost its storage block.
 # 43 -> 46 with The editable sign, upstream #152: the five shop states a sign has to be
 #          protected in, the trade and the ordinary sign that protecting it must not cost,
-#          and the version string the Paper-only half of the guard is registered from.
+#          and the plain-Bukkit PlayerSignOpenEvent that refuses the editor - named, so
+#          that a return to the Paper-only guard fails rather than passes quietly.
 EXPECTED_SCENARIOS=46
 
 # Tier 3. The client is not optional: a run that boots a server, plays nothing

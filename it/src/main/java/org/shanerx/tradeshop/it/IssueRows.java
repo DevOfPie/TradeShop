@@ -16,18 +16,20 @@
 
 package org.shanerx.tradeshop.it;
 
-import io.papermc.paper.event.player.PlayerOpenSignEvent;
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
 import org.bukkit.block.BlockState;
+import org.bukkit.block.Sign;
+import org.bukkit.block.sign.Side;
 import org.bukkit.entity.Player;
 import org.bukkit.event.Event;
 import org.bukkit.event.block.Action;
 import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.event.player.PlayerSignOpenEvent;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.plugin.RegisteredListener;
@@ -52,19 +54,19 @@ import java.util.List;
  *       not there, so a mock that answered null - or threw - would hide it. The
  *       repair a shop owner takes runs inside a real {@code BlockPlaceEvent}
  *       listener as well.</li>
- *   <li><b>#152</b> is about which of two guards is doing the work, and one of
- *       them is a Paper-only event that exists only on a Paper classpath.
- *       "Is a shop sign protected without it" cannot be asked anywhere a real
- *       server is not running.</li>
+ *   <li><b>#152</b> is about which guard is doing the work, and the guard it
+ *       replaced was a listener for a Paper-only event. Which events a running
+ *       server actually delivers, and which handlers are registered for them,
+ *       cannot be asked anywhere a real server is not running.</li>
  * </ul>
  *
  * <h2>What is not claimed</h2>
  * There is no Spigot server in this harness and BuildTools is out of scope, so
  * nothing below proves how Spigot behaves. What the #152 rows prove is
- * TradeShop's own decision: that a right-click on a recognised shop sign leaves
- * the interact event's block result at {@code DENY} whatever state the shop is
- * in, taken through {@code PlayerInteractEvent} - an API every server this
- * plugin supports has - rather than through the Paper-only event.
+ * TradeShop's own decision: that both guards on a shop sign are taken through
+ * APIs every server this plugin supports has - {@code PlayerInteractEvent} for
+ * the block interaction and {@code org.bukkit.event.player.PlayerSignOpenEvent}
+ * for the editor - rather than through Paper's fork-only event.
  */
 final class IssueRows {
 
@@ -214,9 +216,11 @@ final class IssueRows {
         // ------------------------------------------------------------------
         // #152, first half: a shop sign stays editable.
         //
-        // There are two guards and only one of them is portable.
-        // PaperShopProtectionListener:42 cancels PlayerOpenSignEvent, which is
-        // Paper-only API with no Spigot equivalent. The other is
+        // There were two guards and neither held. One was
+        // PaperShopProtectionListener cancelling PlayerOpenSignEvent - Paper-only
+        // API, registered from a version string that had stopped matching Paper,
+        // so absent on Spigot AND absent on the server it was written for; the
+        // row below the next one is what replaced it. The other is
         // ShopTradeListener:150's e.setCancelled(true), and it sits BELOW every
         // early return in that method: no shop (:88), a storage block that is
         // gone (:108), an illegal item (:114), CLOSED (:126), INCOMPLETE (:129),
@@ -338,35 +342,77 @@ final class IssueRows {
         }));
 
         // ------------------------------------------------------------------
-        // #152, second half: whether the Paper listener is registered at all is
-        // decided from a version STRING.
+        // #152, second half: WHICH EVENT refuses the editor.
         //
-        // TradeShop.java:159-161 registers PaperShopProtectionListener when
-        // getServer().getVersion().toLowerCase().contains("paper"). That string
-        // is the server's own build description and nothing promises it names
-        // the software. What actually decides whether the listener CAN be
-        // registered is whether io.papermc.paper.event.player.PlayerOpenSignEvent
-        // is on the classpath, and that is a question the JVM answers exactly.
+        // The sign editor was refused by a listener for Paper's
+        // io.papermc.paper.event.player.PlayerOpenSignEvent, registered only
+        // when getServer().getVersion().toLowerCase().contains("paper") - a
+        // string that is the server's own build description and does not name
+        // the software, so on Paper 1.21.11 build 132
+        // ("1.21.11-132-c5eb079 (MC: 1.21.11)") the listener was not registered
+        // at all. Asking the classpath for the class instead of asking the
+        // string was the obvious repair, and it was the wrong one.
         //
-        // This server has the class, so on this server the listener has to be
-        // registered. Whether it is today is measured rather than assumed, and
-        // the version string is logged beside the answer.
+        // org.bukkit.event.player.PlayerSignOpenEvent is PLAIN BUKKIT. It ships
+        // in spigot-api as well as in paper-api, Paper fires it beside its own,
+        // and it needs no capability test, no version check and no second
+        // listener. That is what this row pins, and it pins it by NAME:
+        // a revert to the Paper-only guard would leave a sign editor that is
+        // still refused on this Paper server and would sail past a row that only
+        // asked whether the editor opened. Every assertion below therefore names
+        // the portable event.
+        //
+        // WHAT THIS DOES NOT CLAIM: there is still no Spigot server in this
+        // harness. What is proved here is that TradeShop's guard hangs off an
+        // API Spigot has, rather than off one only Paper has.
+        //
+        // BOTH SIDES, deliberately. getSide() is not consulted by the handler: a
+        // shop's lines live on the front, ShopType.getType reads line 0 which is
+        // the front, and onSignChange refuses the finished edit for the whole
+        // block whichever side it came from - so opening the back would open a
+        // screen whose result is thrown away. Both sides are asserted so that a
+        // later side test reads as a change of decision rather than as a bug fix.
         // ------------------------------------------------------------------
-        rows.add(new IntegrationPlugin.Scenario("paperSignProtectionIsRegisteredByCapabilityNotByVersionString", () -> {
+        rows.add(new IntegrationPlugin.Scenario("aShopSignRefusesItsEditorThroughPlainBukkitApi", () -> {
             Bukkit.getLogger().info("[harness] server name " + Bukkit.getServer().getName()
                     + ", version string " + Bukkit.getServer().getVersion());
 
             boolean registered = false;
-            for (RegisteredListener listener : PlayerOpenSignEvent.getHandlerList().getRegisteredListeners()) {
+            for (RegisteredListener listener : PlayerSignOpenEvent.getHandlerList().getRegisteredListeners()) {
                 if ("TradeShop".equals(listener.getPlugin().getName())) registered = true;
             }
 
             Assert.that(registered,
-                    "PlayerOpenSignEvent is on this server's classpath, so TradeShop must be "
-                            + "listening for it - TradeShop.java:159-161 decides that from "
-                            + "getServer().getVersion().toLowerCase().contains(\"paper\") rather than "
-                            + "from whether the class is there, and this server's version string is \""
+                    "TradeShop must listen for org.bukkit.event.player.PlayerSignOpenEvent, which is "
+                            + "plain Bukkit API and present on every server this plugin supports. A "
+                            + "guard that hangs off Paper's PlayerOpenSignEvent instead is a guard "
+                            + "Spigot does not get, and one this server did not get either while it "
+                            + "was registered from the version string \""
                             + Bukkit.getServer().getVersion() + "\"");
+
+            RealShop scene = new RealShop(plugin, FIRST_SITE + 8);
+            scene.placeChestAndSign();
+            scene.createShopByCommand("1 DIAMOND", "1 EMERALD");
+            Assert.that(scene.get(() -> ShopType.isShop(scene.signBlock())),
+                    "precondition: the block reads as a shop sign before its editor is asked for");
+
+            Assert.that(openSign(scene, scene.owner(), Side.FRONT),
+                    "a PlayerSignOpenEvent on the front of a shop sign must come back cancelled - "
+                            + "that event, not Paper's, is what has to refuse the editor");
+            Assert.that(openSign(scene, scene.owner(), Side.BACK),
+                    "and so must one on the back: the guard does not read getSide(), because "
+                            + "onSignChange refuses the finished edit for the whole block either way "
+                            + "and an editor whose result is discarded is not protection");
+
+            // The same event over a sign nobody has made a shop of. Without this
+            // the row above is satisfied by a handler that cancels everything.
+            RealShop plain = new RealShop(plugin, FIRST_SITE + 9);
+            plain.placeChestAndSign();
+            Assert.that(!plain.get(() -> ShopType.isShop(plain.signBlock())),
+                    "precondition: a blank sign is not a shop");
+            Assert.that(!openSign(plain, plain.owner(), Side.FRONT),
+                    "an ordinary sign must still open its editor, or this protection is a "
+                            + "server-wide ban on writing signs");
         }));
 
         return rows;
@@ -392,6 +438,28 @@ final class IssueRows {
                     scene.signBlock(), BlockFace.NORTH);
             Bukkit.getPluginManager().callEvent(event);
             return event.useInteractedBlock();
+        });
+    }
+
+    /**
+     * Asks the server to open the scene's sign for editing, the way a
+     * right-click on a written sign does, and answers whether anything refused.
+     *
+     * <p>{@code Cause.INTERACT} because that is the cause Paper 1.21.11 build 132
+     * was measured sending for exactly that click. The event is constructed and
+     * fired here rather than driven by a real click for the same reason the rest
+     * of this file constructs its events: what is being asserted is TradeShop's
+     * decision about this event, and a click routed through the server would
+     * also be answered by {@code onShopSignInteract}, which denies the block
+     * interaction before the editor is ever asked for.
+     */
+    @SuppressWarnings("removal")
+    private static boolean openSign(RealShop scene, Player player, Side side) {
+        return scene.get(() -> {
+            PlayerSignOpenEvent event = new PlayerSignOpenEvent(player,
+                    (Sign) scene.signBlock().getState(), side, PlayerSignOpenEvent.Cause.INTERACT);
+            Bukkit.getPluginManager().callEvent(event);
+            return event.isCancelled();
         });
     }
 
