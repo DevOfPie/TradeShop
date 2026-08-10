@@ -74,10 +74,12 @@ final class IssueRows {
     }
 
     /**
-     * These rows' patch of the world, 30..39. Registered on {@code RealShop}'s
-     * constructor, which is the only list of who owns what.
+     * These rows' patch of the world. Reserved through {@link SiteAllocator}
+     * rather than agreed by comment - this suite and {@code SettingToggleRows}
+     * both once wrote a comment exactly like this one claiming 30, and neither
+     * comment named the other.
      */
-    private static final int FIRST_SITE = 30;
+    private static final SiteAllocator.Reservation SITE = SiteAllocator.reserve("IssueRows", 10);
 
     static List<IntegrationPlugin.Scenario> rows(IntegrationPlugin plugin) {
         List<IntegrationPlugin.Scenario> rows = new ArrayList<>();
@@ -125,7 +127,7 @@ final class IssueRows {
         // the owner's work, and a vanished block is not consent to destroy them.
         // ------------------------------------------------------------------
         rows.add(new IntegrationPlugin.Scenario("aShopWhoseStorageBlockIsGoneAsksForRepairRatherThanThrowing", () -> {
-            RealShop scene = new RealShop(plugin, FIRST_SITE);
+            RealShop scene = new RealShop(plugin, SITE.at(0));
             scene.placeChestAndSign();
             scene.createShopByCommand("1 DIAMOND", "1 EMERALD");
             scene.stockShop(new ItemStack(Material.DIAMOND, 10));
@@ -244,7 +246,7 @@ final class IssueRows {
         rows.add(new IntegrationPlugin.Scenario("aShopSignIsProtectedFromEditingInEveryShopState", () -> {
             // OUT_OF_STOCK: a complete shop with an empty chest, and the state
             // this was measured leaking in.
-            RealShop outOfStock = new RealShop(plugin, FIRST_SITE + 1);
+            RealShop outOfStock = new RealShop(plugin, SITE.at(1));
             outOfStock.placeChestAndSign();
             outOfStock.createShopByCommand("1 DIAMOND", "1 EMERALD");
             assertState(outOfStock, ShopStatus.OUT_OF_STOCK);
@@ -252,14 +254,14 @@ final class IssueRows {
                     + "returns from before the setCancelled at :150");
 
             // INCOMPLETE: /tradeshop create and nothing else.
-            RealShop incomplete = new RealShop(plugin, FIRST_SITE + 2);
+            RealShop incomplete = new RealShop(plugin, SITE.at(2));
             incomplete.placeChestAndSign();
             incomplete.dispatch("create");
             assertState(incomplete, ShopStatus.INCOMPLETE);
             assertSignDenied(incomplete, "a shop whose owner has not set its items yet - :129");
 
             // CLOSED: the owner shut it deliberately.
-            RealShop closed = new RealShop(plugin, FIRST_SITE + 3);
+            RealShop closed = new RealShop(plugin, SITE.at(3));
             closed.placeChestAndSign();
             closed.createShopByCommand("1 DIAMOND", "1 EMERALD");
             Shop closedShop = closed.get(() -> Shop.loadShop(new ShopLocation(closed.signBlock().getLocation())));
@@ -273,7 +275,7 @@ final class IssueRows {
             // A storage block that is gone. #160's guard is what gets the
             // listener as far as :108 rather than throwing on the way, and this
             // is the state it lands in once it does.
-            RealShop noChest = new RealShop(plugin, FIRST_SITE + 4);
+            RealShop noChest = new RealShop(plugin, SITE.at(4));
             noChest.placeChestAndSign();
             noChest.createShopByCommand("1 DIAMOND", "1 EMERALD");
             noChest.run(() -> noChest.chestBlock().setType(Material.AIR, false));
@@ -282,7 +284,7 @@ final class IssueRows {
             // OPEN, which is the one state the fallback does cover, so that a
             // red run reads as "these states leak" rather than "signs are
             // unprotected".
-            RealShop open = new RealShop(plugin, FIRST_SITE + 5);
+            RealShop open = new RealShop(plugin, SITE.at(5));
             open.placeChestAndSign();
             open.createShopByCommand("1 DIAMOND", "1 EMERALD");
             open.stockShop(new ItemStack(Material.DIAMOND, 10));
@@ -310,7 +312,7 @@ final class IssueRows {
         // interaction cannot touch them.
         // ------------------------------------------------------------------
         rows.add(new IntegrationPlugin.Scenario("protectingAShopSignCostsNeitherTheTradeNorAnOrdinarySign", () -> {
-            RealShop scene = new RealShop(plugin, FIRST_SITE + 6);
+            RealShop scene = new RealShop(plugin, SITE.at(6));
             scene.placeChestAndSign();
             scene.createShopByCommand("1 DIAMOND", "1 EMERALD");
             scene.stockShop(new ItemStack(Material.DIAMOND, 10));
@@ -333,7 +335,7 @@ final class IssueRows {
 
             // An ordinary sign is nobody's shop and has to be left entirely
             // alone, or this protection is a server-wide ban on writing signs.
-            RealShop plain = new RealShop(plugin, FIRST_SITE + 7);
+            RealShop plain = new RealShop(plugin, SITE.at(7));
             plain.placeChestAndSign();
             Assert.that(!plain.get(() -> ShopType.isShop(plain.signBlock())),
                     "precondition: a blank sign is not a shop");
@@ -390,7 +392,7 @@ final class IssueRows {
                             + "was registered from the version string \""
                             + Bukkit.getServer().getVersion() + "\"");
 
-            RealShop scene = new RealShop(plugin, FIRST_SITE + 8);
+            RealShop scene = new RealShop(plugin, SITE.at(8));
             scene.placeChestAndSign();
             scene.createShopByCommand("1 DIAMOND", "1 EMERALD");
             Assert.that(scene.get(() -> ShopType.isShop(scene.signBlock())),
@@ -406,7 +408,7 @@ final class IssueRows {
 
             // The same event over a sign nobody has made a shop of. Without this
             // the row above is satisfied by a handler that cancels everything.
-            RealShop plain = new RealShop(plugin, FIRST_SITE + 9);
+            RealShop plain = new RealShop(plugin, SITE.at(9));
             plain.placeChestAndSign();
             Assert.that(!plain.get(() -> ShopType.isShop(plain.signBlock())),
                     "precondition: a blank sign is not a shop");

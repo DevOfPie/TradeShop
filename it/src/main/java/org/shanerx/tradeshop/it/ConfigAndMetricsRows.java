@@ -71,10 +71,11 @@ final class ConfigAndMetricsRows {
     }
 
     /**
-     * These rows' patch of the world, 40..46. Registered on {@code RealShop}'s
-     * constructor, which is the only list of who owns what.
+     * These rows' patch of the world. Reserved through {@link SiteAllocator}
+     * rather than agreed by comment - see that class for why a hand-typed
+     * range stopped being trustworthy.
      */
-    private static final int FIRST_SITE = 40;
+    private static final SiteAllocator.Reservation SITE = SiteAllocator.reserve("ConfigAndMetricsRows", 7);
 
     static List<IntegrationPlugin.Scenario> rows(IntegrationPlugin plugin) {
         List<IntegrationPlugin.Scenario> rows = new ArrayList<>();
@@ -124,7 +125,7 @@ final class ConfigAndMetricsRows {
 
             // A scene only so that the config edits are marshalled onto the server
             // thread the same way every other touch in this tier is.
-            RealShop scene = new RealShop(plugin, FIRST_SITE);
+            RealShop scene = new RealShop(plugin, SITE.at(0));
             scene.placeChestAndSign();
 
             try {
@@ -215,7 +216,7 @@ final class ConfigAndMetricsRows {
         // chunk is full when it holds five shops.
         // ------------------------------------------------------------------
         rows.add(new IntegrationPlugin.Scenario("theShopCountForAChunkCountsShopsRatherThanTheirFields", () -> {
-            RealShop scene = new RealShop(plugin, FIRST_SITE + 1);
+            RealShop scene = new RealShop(plugin, SITE.at(1));
             scene.placeChestAndSign();
 
             Assert.equal(0, chunkCount(plugin, scene),
@@ -257,11 +258,11 @@ final class ConfigAndMetricsRows {
 
             int before = Sync.get(plugin, () -> tradeShop().getDataStorage().getShopCountInWorld(world));
 
-            RealShop first = new RealShop(plugin, FIRST_SITE + 2);
+            RealShop first = new RealShop(plugin, SITE.at(2));
             first.placeChestAndSign();
             first.createShopByCommand("1 DIAMOND", "1 EMERALD");
 
-            RealShop second = new RealShop(plugin, FIRST_SITE + 3);
+            RealShop second = new RealShop(plugin, SITE.at(3));
             second.placeChestAndSign();
             second.createShopByCommand("1 DIAMOND", "1 EMERALD");
 
@@ -303,7 +304,7 @@ final class ConfigAndMetricsRows {
         // second half of this scenario removes the race rather than the assertion.
         // ------------------------------------------------------------------
         rows.add(new IntegrationPlugin.Scenario("searchingAChunkFindsTheShopsInIt", () -> {
-            RealShop scene = new RealShop(plugin, FIRST_SITE + 4);
+            RealShop scene = new RealShop(plugin, SITE.at(4));
             scene.placeChestAndSign();
             scene.createShopByCommand("1 DIAMOND", "1 EMERALD");
 
@@ -373,7 +374,7 @@ final class ConfigAndMetricsRows {
         // still in use.
         // ------------------------------------------------------------------
         rows.add(new IntegrationPlugin.Scenario("unlinkingADoubleChestUnlinksBothOfItsHalves", () -> {
-            Block[] halves = doubleChest(plugin, FIRST_SITE + 5);
+            Block[] halves = doubleChest(plugin, SITE.at(5));
             Block left = halves[0], right = halves[1];
 
             Assert.that(Sync.get(plugin, () -> ShopChest.isDoubleChest(left)),
@@ -431,7 +432,7 @@ final class ConfigAndMetricsRows {
         // stays that way until something re-saves it after a sign update.
         // ------------------------------------------------------------------
         rows.add(new IntegrationPlugin.Scenario("aShopStoresTheStatusItActuallyHas", () -> {
-            RealShop scene = new RealShop(plugin, FIRST_SITE + 6);
+            RealShop scene = new RealShop(plugin, SITE.at(6));
             scene.placeChestAndSign();
             scene.createShopByCommand("1 DIAMOND", "1 EMERALD");
 

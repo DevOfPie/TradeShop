@@ -80,8 +80,12 @@ final class AllowSignBreakRows {
     private AllowSignBreakRows() {
     }
 
-    /** These rows' patch of the world, 70..75. See the site register on {@link RealShop}. */
-    private static final int FIRST_SITE = 70;
+    /**
+     * These rows' patch of the world. Reserved through {@link SiteAllocator}
+     * rather than agreed by comment - see that class for why a hand-typed
+     * range stopped being trustworthy.
+     */
+    private static final SiteAllocator.Reservation SITE = SiteAllocator.reserve("AllowSignBreakRows", 6);
 
     /** The shop's stock. Neither material is the shop's cost, which is the point. */
     private static final int DIAMONDS = 12;
@@ -94,7 +98,7 @@ final class AllowSignBreakRows {
         // The subject. RED before the fix.
         // ------------------------------------------------------------------
         rows.add(new IntegrationPlugin.Scenario("aShopWhoseSignBreakIsAllowedIsRemovedAndItsStorageIsLeftAlone", () -> {
-            RealShop scene = stockedShop(plugin, FIRST_SITE);
+            RealShop scene = stockedShop(plugin, SITE.at(0));
             ShopLocation where = locationOf(scene);
 
             // Not the owner, and not an admin. A harness player answers
@@ -102,7 +106,7 @@ final class AllowSignBreakRows {
             // to true, so "a stranger" has to be built rather than assumed - or
             // the row would be about an admin and would say nothing about the
             // setting.
-            Player stranger = stranger(scene, "asbStranger" + FIRST_SITE);
+            Player stranger = stranger(scene, "asbStranger" + SITE.at(0));
 
             withSignBreakAllowed(scene, () -> {
                 Assert.that(scene.get(() -> Shop.loadShop(where)) != null,
@@ -157,7 +161,7 @@ final class AllowSignBreakRows {
         // RED before the fix, for the same reason as the row above.
         // ------------------------------------------------------------------
         rows.add(new IntegrationPlugin.Scenario("allowSignBreakOnTakesTheOwnersAndAnAdminsShopTheSameWay", () -> {
-            RealShop ownersOwn = stockedShop(plugin, FIRST_SITE + 1);
+            RealShop ownersOwn = stockedShop(plugin, SITE.at(1));
             ShopLocation ownersShop = locationOf(ownersOwn);
 
             withSignBreakAllowed(ownersOwn, () -> {
@@ -176,9 +180,9 @@ final class AllowSignBreakRows {
                         "so nothing is on the ground for the owner's own break either");
             });
 
-            RealShop adminsTarget = stockedShop(plugin, FIRST_SITE + 2);
+            RealShop adminsTarget = stockedShop(plugin, SITE.at(2));
             ShopLocation adminsShop = locationOf(adminsTarget);
-            Player admin = admin(adminsTarget, "asbAdmin" + (FIRST_SITE + 2));
+            Player admin = admin(adminsTarget, "asbAdmin" + SITE.at(2));
 
             withSignBreakAllowed(adminsTarget, () -> {
                 BlockBreakEvent broke = breakSign(adminsTarget, admin);
@@ -206,9 +210,9 @@ final class AllowSignBreakRows {
                             + "every assertion below is about");
 
             // A stranger is refused, and told why.
-            RealShop refused = stockedShop(plugin, FIRST_SITE + 3);
+            RealShop refused = stockedShop(plugin, SITE.at(3));
             ShopLocation refusedShop = locationOf(refused);
-            Player stranger = stranger(refused, "asbStranger" + (FIRST_SITE + 3));
+            Player stranger = stranger(refused, "asbStranger" + SITE.at(3));
 
             BlockBreakEvent strangerBreak = refused.get(() -> {
                 BlockBreakEvent event = new BlockBreakEvent(refused.signBlock(), stranger);
@@ -232,7 +236,7 @@ final class AllowSignBreakRows {
                     "and nothing is on the ground");
 
             // The owner takes their own shop down, and keeps their stock.
-            RealShop ownersOwn = stockedShop(plugin, FIRST_SITE + 4);
+            RealShop ownersOwn = stockedShop(plugin, SITE.at(4));
             ShopLocation ownersShop = locationOf(ownersOwn);
 
             BlockBreakEvent ownerBreak = breakSign(ownersOwn, ownersOwn.owner());
@@ -251,9 +255,9 @@ final class AllowSignBreakRows {
                     "so nothing is on the ground either");
 
             // And an admin taking someone else's down.
-            RealShop adminsTarget = stockedShop(plugin, FIRST_SITE + 5);
+            RealShop adminsTarget = stockedShop(plugin, SITE.at(5));
             ShopLocation adminsShop = locationOf(adminsTarget);
-            Player admin = admin(adminsTarget, "asbAdmin" + (FIRST_SITE + 5));
+            Player admin = admin(adminsTarget, "asbAdmin" + SITE.at(5));
 
             BlockBreakEvent adminBreak = breakSign(adminsTarget, admin);
 

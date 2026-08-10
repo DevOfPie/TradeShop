@@ -165,12 +165,15 @@ final class ClientPhase implements Listener, CommandExecutor {
     }
 
     /**
-     * A patch of world no tier-2 scenario has touched. Tier 2 uses x = 1000n for
-     * n in 1..5, and TradeShop keys every shop, chest linkage and protection entry
-     * by world name plus coordinates, so unused coordinates are an unwritten
-     * namespace.
+     * A patch of world no tier-2 scenario has touched. {@link SiteAllocator}
+     * is what keeps that true now rather than a comment claiming a range -
+     * every {@link RealShop}-backed suite gets its sites from it, and
+     * {@link SiteAllocator#TIER_3_CLIENT} is the one index it can never hand
+     * out, because {@link RealShop} itself refuses to build there. TradeShop
+     * keys every shop, chest linkage and protection entry by world name plus
+     * coordinates, so an index nobody else holds is an unwritten namespace.
      */
-    private static final int SITE_X = 7000;
+    private static final int SITE_X = SiteAllocator.TIER_3_CLIENT * 1000;
     private static final int SITE_Z = 0;
 
     /**

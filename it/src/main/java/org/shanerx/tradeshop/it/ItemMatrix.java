@@ -104,10 +104,11 @@ final class ItemMatrix {
     }
 
     /**
-     * These rows' patch of the world, 10..11. Registered on {@code RealShop}'s
-     * constructor, which is the only list of who owns what.
+     * The site coordinates these rows use. Reserved through {@link SiteAllocator}
+     * rather than agreed by comment - see that class for why a hand-typed range
+     * stopped being trustworthy.
      */
-    private static final int FIRST_SITE = 10;
+    private static final SiteAllocator.Reservation SITE = SiteAllocator.reserve("ItemMatrix", 2);
 
     /**
      * The player the save-and-reload row's shop is shared with, so that at least
@@ -307,7 +308,7 @@ final class ItemMatrix {
         // ------------------------------------------------------------------
 
         rows.add(new IntegrationPlugin.Scenario("aShopWithAComplexItemSurvivesASaveAndReload", () -> {
-            RealShop scene = new RealShop(plugin, FIRST_SITE);
+            RealShop scene = new RealShop(plugin, SITE.at(0));
             scene.placeChestAndSign();
             scene.createShopByCommand("1 DIAMOND", "1 EMERALD");
 
@@ -496,7 +497,7 @@ final class ItemMatrix {
         // ------------------------------------------------------------------
 
         rows.add(new IntegrationPlugin.Scenario("aRealTradeRefusesABuyerHoldingACheaperItem", () -> {
-            RealShop scene = new RealShop(plugin, FIRST_SITE + 1);
+            RealShop scene = new RealShop(plugin, SITE.at(1));
             scene.placeChestAndSign();
             scene.createShopByCommand("1 DIAMOND", "1 EMERALD");
 

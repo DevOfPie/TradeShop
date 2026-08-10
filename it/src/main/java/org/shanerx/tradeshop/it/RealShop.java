@@ -72,19 +72,11 @@ final class RealShop {
     private Player owner;
 
     /**
-     * The site register. Every index in use, in one place, because five separate
-     * hand-kept lists is how two of them came to claim the same ground.
-     *
-     * <table>
-     *   <tr><td>1..5, 12..18, 50..52</td><td>{@link IntegrationPlugin}, inline rows</td></tr>
-     *   <tr><td>7</td><td>{@link ClientPhase} - <b>reserved, see below</b></td></tr>
-     *   <tr><td>10..11</td><td>{@link ItemMatrix}</td></tr>
-     *   <tr><td>20..29</td><td>{@link DefectRows}</td></tr>
-     *   <tr><td>30..39</td><td>{@link IssueRows}</td></tr>
-     *   <tr><td>40..46</td><td>{@link ConfigAndMetricsRows}</td></tr>
-     *   <tr><td>60</td><td>{@link SettingToggleRows}</td></tr>
-     *   <tr><td>70..75</td><td>{@link AllowSignBreakRows}</td></tr>
-     * </table>
+     * Where a scenario's ground comes from. There is no table here any more:
+     * the register this javadoc used to carry was a list every suite had to be
+     * edited into by hand, and the two defects below are both what happened
+     * when one was not. {@link SiteAllocator} hands out the ranges instead, so
+     * the agreement is kept by the runtime rather than by this comment.
      *
      * <p><b>A site is a namespace, and two rows on one site is not a near miss.</b>
      * TradeShop keys every shop, chest linkage and protection entry by world name
@@ -94,16 +86,36 @@ final class RealShop {
      * control left a sign standing that still read as a shop, and
      * {@code Utils.createShop:515} refused the second row's shop with
      * "existing-shop" - a red row whose message pointed at the counting code,
-     * which was correct all along. Take a range that is not in the table above and
-     * add it to the table in the same commit.
+     * which was correct all along. {@code IssueRows} and {@code SettingToggleRows}
+     * separately both declared 30, each with a comment naming the other suites it
+     * had checked against, and neither comment named the other.
+     *
+     * <p>A new suite reserves its own range from {@link SiteAllocator} and
+     * addresses it by offset. Nothing here can stop a suite passing a literal
+     * instead - Java cannot refuse an {@code int} for where it came from - but a
+     * suite that does ask can no longer be handed ground another suite holds.
      *
      * @param index the scenario's patch of the world, at x = {@code index * 1000}.
-     *              <b>7 is not available</b>: {@link ClientPhase} builds its site
-     *              at x = 7000 from {@code getHighestBlockYAt}, and a scenario
-     *              that has left blocks floating there moves the client's site
-     *              out from under the bot, which then fails to place anything.
+     *              Every suite gets this from a {@link SiteAllocator.Reservation}
+     *              rather than choosing it by hand - see {@link SiteAllocator}
+     *              for why a hand-agreed range was not enough - except the
+     *              scenarios declared directly in {@code IntegrationPlugin},
+     *              which predate that class and are reserved there as one
+     *              block instead.
+     * @throws IllegalArgumentException if {@code index} is
+     *              {@link SiteAllocator#TIER_3_CLIENT}: that site belongs to
+     *              {@link ClientPhase}, which builds it directly rather than
+     *              through this class, and a scene left there would leave
+     *              blocks the client's {@code getHighestBlockYAt} would trip
+     *              over
      */
     RealShop(Plugin plugin, int index) {
+        if (index == SiteAllocator.TIER_3_CLIENT) {
+            throw new IllegalArgumentException("site " + index + " is reserved for tier 3's client ("
+                    + "ClientPhase, x=" + (SiteAllocator.TIER_3_CLIENT * 1000) + "); a scene built there "
+                    + "would leave blocks behind that move the client's site out from under the bot when "
+                    + "it next asks getHighestBlockYAt where the ground is");
+        }
         this.plugin = plugin;
         this.index = index;
     }
