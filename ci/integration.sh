@@ -159,7 +159,24 @@ RUN_TIMEOUT=${TS_IT_TIMEOUT:-300}
 # is therefore bound to loopback on a high port and lives for seconds. A copy of
 # this script run against a public interface is an unauthenticated server.
 BIND_ADDRESS=127.0.0.1
-BIND_PORT=25599
+
+# The port is chosen per run rather than fixed, because a fixed one is a shared
+# resource nobody declared. Two runs on one machine - two worktrees, two agents,
+# or a run started before the last one had let go - raced for 25599, and the
+# loser died with Paper's "**** FAILED TO BIND TO PORT!" buried in a console
+# this script summarised as "the server never finished starting". That reads as
+# a broken build. It was a busy machine.
+#
+# The window below is searched from an offset that is this checkout's own path
+# hashed, so one worktree gets the same port on every run - reproducible in a
+# log, and reachable by hand - while two worktrees begin their search in
+# different places and in practice never meet. The first port in the window
+# nothing is listening on wins; if every one of them is taken the run fails
+# saying exactly that, which is a machine that is too busy and not a server that
+# is broken. TS_IT_PORT pins a port instead and skips the search, for a run that
+# has to be reached at an address agreed in advance.
+PORT_BASE=25599
+PORT_SPAN=100
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 CACHE=$ROOT/target/it-cache
@@ -295,6 +312,67 @@ install_client() {
 # ---------------------------------------------------------------------------
 # 4. A throwaway server.
 # ---------------------------------------------------------------------------
+
+# Sets BIND_PORT to a port in the window that nothing is listening on.
+#
+# The probe binds the address the server is about to bind, using node - already
+# required, because tier 3 is not optional - so that "free" is the kernel's
+# answer rather than this script's guess. One node process walks the whole
+# window; a process per candidate would be a hundred forks to learn the same
+# thing.
+#
+# This runs as late as it can, immediately before the server is assembled and
+# booted, because a port proved free and then taken by someone else is the one
+# hole the approach cannot close: nothing can hold a port on behalf of a process
+# that does not exist yet. Keeping that gap to seconds makes it a rare loss
+# instead of a likely one, and check_console names it when it does happen.
+pick_port() {
+    if [ -n "${TS_IT_PORT:-}" ]; then
+        BIND_PORT=$TS_IT_PORT
+        say "TS_IT_PORT pins this run to ${BIND_ADDRESS}:${BIND_PORT}; the window is not searched"
+        return 0
+    fi
+
+    # Four hex digits of the checkout's path: enough spread that neighbouring
+    # worktrees do not start on the same offset, and the same answer every run.
+    offset=$(printf '%s' "$ROOT" | sha256sum | cut -c1-4)
+    offset=$(( 0x$offset % PORT_SPAN ))
+
+    BIND_PORT=$(
+        PORT_BASE=$PORT_BASE PORT_SPAN=$PORT_SPAN PORT_OFFSET=$offset PORT_HOST=$BIND_ADDRESS \
+        node -e '
+const net = require("net");
+const base = Number(process.env.PORT_BASE);
+const span = Number(process.env.PORT_SPAN);
+const start = Number(process.env.PORT_OFFSET);
+const host = process.env.PORT_HOST;
+let tried = 0;
+const next = () => {
+    if (tried >= span) process.exit(1);
+    const port = base + ((start + tried++) % span);
+    const probe = net.createServer();
+    probe.once("error", next);
+    probe.listen(port, host, () => probe.close(() => {
+        process.stdout.write(String(port));
+        process.exit(0);
+    }));
+};
+next();
+'
+    ) || BIND_PORT=
+
+    [ -n "$BIND_PORT" ] || die "every port from ${BIND_ADDRESS}:${PORT_BASE} to \
+${BIND_ADDRESS}:$(( PORT_BASE + PORT_SPAN - 1 )) is in use, so this run has nowhere
+       to listen - all $PORT_SPAN were tried. Nothing is wrong with the plugin,
+       the server or this script: the machine is holding the entire window. Look
+       for harness servers that outlived their runs (java ... paper.jar --nogui,
+       under some checkout's target/it-server) and stop them, or set TS_IT_PORT
+       to a port outside the window."
+
+    say "this run has ${BIND_ADDRESS}:${BIND_PORT} (window ${PORT_BASE}-$(( PORT_BASE + PORT_SPAN - 1 )), \
+offset ${offset} from this checkout's path)"
+}
+
 assemble_server() {
     tradeshop_jar=$1
     it_jar=$2
@@ -428,6 +506,20 @@ launch_client() {
 check_console() {
     [ -f "$CONSOLE" ] || die "the server produced no console output at all"
 
+    # Asked before "Done (" below, and that order is the whole point. A server
+    # that could not bind never prints "Done (" either, so the generic message
+    # got there first and reported a busy machine as a server that would not
+    # start - which is how one run was read as a broken build. pick_port makes
+    # this rare; naming it makes it cheap on the occasions it still happens.
+    if grep -q 'FAILED TO BIND TO PORT' "$CONSOLE"; then
+        die "something else took ${BIND_ADDRESS}:${BIND_PORT} between this script proving it free and
+       the server binding it, so the server stopped instead of starting. This is
+       not a fault in the plugin, the server or the harness: it is two runs on
+       one machine landing on the same port within the same few seconds. Run it
+       again, or set TS_IT_PORT to pin a port nothing else will pick. Console:
+$(tail -n 20 "$CONSOLE")"
+    fi
+
     grep -q 'Done (' "$CONSOLE" \
         || die "the server never finished starting - it printed no 'Done (' line. Console:
 $(tail -n 40 "$CONSOLE")"
@@ -535,6 +627,7 @@ main() {
     build_test_plugin "$TRADESHOP_JAR"
     install_client
 
+    pick_port
     assemble_server "$TRADESHOP_JAR" "$IT_JAR"
 
     run_started=$(date +%s)
