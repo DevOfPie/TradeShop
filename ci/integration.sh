@@ -107,7 +107,10 @@ BKCL_SHA256=e7b15d76898834a0b7e8a080982a3f24c69b4a82e87a1e5ec29bce8d17045c46
 # 37 -> 39 with The five-slot storage types, the two permitted storage types that hold five slots.
 # 39 -> 41 with The double chest, the double chest whose Z branch compares an X against a Z,
 #          and the X-axis control that is expected to stay green beside it.
-EXPECTED_SCENARIOS=41
+# 41 -> 42 with The cost side, the cost side a shop loses the first time it is read off disk.
+#          That one was not in the review: it was noticed as `cost: []` in a shop file
+#          left behind by a run, characterised afterwards, and pinned here.
+EXPECTED_SCENARIOS=42
 
 # Tier 3. The client is not optional: a run that boots a server, plays nothing
 # and exits 0 is the vacuous pass this project treats as the worst possible

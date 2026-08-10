@@ -30,6 +30,9 @@ import org.bukkit.event.block.Action;
 import org.bukkit.inventory.ItemStack;
 import org.shanerx.tradeshop.TradeShop;
 import org.shanerx.tradeshop.data.config.Setting;
+import org.shanerx.tradeshop.data.storage.DataStorage;
+import org.shanerx.tradeshop.data.storage.DataType;
+import org.shanerx.tradeshop.item.ShopItemSide;
 import org.shanerx.tradeshop.item.ShopItemStack;
 import org.shanerx.tradeshop.shop.Shop;
 import org.shanerx.tradeshop.shop.ShopChest;
@@ -65,6 +68,9 @@ import java.util.List;
  *   <li><b>Double chests</b> needs a real double chest. MockBukkit has no
  *       {@code DoubleChest}, so {@code ShopChest.isDoubleChest} is false there and
  *       the branch under test is never entered at all.</li>
+ *   <li><b>The cost side read off disk</b> is a real JSON file whose modification time
+ *       moves while the loader is still reading it. Nothing about it exists without a
+ *       plugin data folder and a storage layer that reloads itself.</li>
  * </ul>
  *
  * <p>Every row asserts what an operator is entitled to, so a red row is the
@@ -400,6 +406,69 @@ final class DefectRows {
                     "the other half of the left block is the right block");
             Assert.equal(left, Sync.get(plugin, () -> ShopChest.getOtherHalfOfDoubleChest(right)),
                     "and the other half of the right block is the left block");
+        }));
+
+        // ------------------------------------------------------------------
+        // A shop read back off disk loses its cost side. Same symptom class as
+        // "my shop reverted", and it was noticed from a shop file carrying
+        // `cost: []` rather than from a report.
+        //
+        // Shop.deserialize:251-292 walks the keys of a FlatFileSection, which is a
+        // LIVE VIEW of the file: SimplixStorage's FlatFile defaults to
+        // ReloadSettings.INTELLIGENT, so every get() on it calls reloadIfNeeded()
+        // and re-reads the file the moment its mtime moves.
+        //
+        // The loop moves that mtime itself. `case "product"` at :264 adds each item
+        // through Shop.addSideItem, which ends at saveShop:1235 - and the shop it
+        // saves is the half-built one, product only. From that write onwards every
+        // remaining key is answered out of the file that was just written over the
+        // one being read, so `cost` comes back as the empty list that write
+        // contained. The damage is then saved again, so it is permanent: the shop
+        // reloads INCOMPLETE and stops trading until its owner sets the cost again.
+        //
+        // MEASURED, on this server, twice: of the fifteen shops a full run leaves on
+        // disk, exactly one has `cost: []`, and it is the only one any scenario ever
+        // read back off the file rather than out of DataStorage's shopCache.
+        //
+        // Not reachable at tier 1: MockBukkit has no plugin data folder full of real
+        // JSON, and the defect is a file's mtime moving under a reader.
+        // ------------------------------------------------------------------
+        rows.add(new IntegrationPlugin.Scenario("aShopReadBackFromDiskStillTakesItsCost", () -> {
+            RealShop scene = new RealShop(plugin, FIRST_SITE + 7);
+            scene.placeChestAndSign();
+            scene.createShopByCommand("1 DIAMOND", "1 EMERALD");
+
+            ShopLocation where = scene.get(() -> new ShopLocation(scene.signBlock().getLocation()));
+
+            Shop live = scene.get(() -> Shop.loadShop(where));
+            Assert.that(live != null, "precondition: the command created a shop");
+            Assert.equal(1, live.getSideList(ShopItemSide.COST).size(),
+                    "precondition: the shop the running plugin holds takes one emerald");
+
+            // The restart, without restarting. A brand new DataStorage has an empty
+            // shopCache, so this read comes off the file - the same path a starting
+            // server takes for every shop it has.
+            Shop reloaded = scene.get(() -> new DataStorage(DataType.FLATFILE).loadShopFromSign(where));
+
+            Assert.that(reloaded != null, "the shop should still be on disk");
+            Assert.equal(1, reloaded.getSideList(ShopItemSide.PRODUCT).size(),
+                    "the product side should come back from disk");
+            Assert.equal(1, reloaded.getSideList(ShopItemSide.COST).size(),
+                    "and so should the cost side - Shop.deserialize adds the product through "
+                            + "addSideItem, which saves, and that save rewrites the very file the "
+                            + "loop is still reading from");
+            Assert.equal(Material.EMERALD,
+                    reloaded.getSideList(ShopItemSide.COST).get(0).getItemStack().getType(),
+                    "and it should still be the emerald the shop was created to take");
+            Assert.that(!reloaded.isMissingItems(),
+                    "a shop with both sides must not come back off disk as incomplete");
+
+            // The file, not just the object: the load wrote what it had read, so a
+            // second read gets the same answer whatever this one said.
+            Assert.equal(1, scene.get(() -> new DataStorage(DataType.FLATFILE).loadShopFromSign(where))
+                            .getSideList(ShopItemSide.COST).size(),
+                    "and the file must not have been rewritten without the cost side, or the "
+                            + "loss outlives the read that caused it");
         }));
 
         return rows;
