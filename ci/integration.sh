@@ -55,7 +55,9 @@ set -eu
 # therefore runs exactly the pinned combination below. Overriding one of the
 # three means overriding all three: a version, a build and the checksum that
 # build publishes belong together, and the download is still verified against
-# whatever PAPER_SHA256 says.
+# whatever PAPER_SHA256 says. Every other dependency this script pins and
+# downloads - BKCommonLib below - follows the same rule for the same reason;
+# see its own comment for where its shape has to differ.
 PAPER_PROJECT=${PAPER_PROJECT:-paper}
 PAPER_VERSION=${PAPER_VERSION:-1.21.11}
 PAPER_BUILD=${PAPER_BUILD:-132}
@@ -73,10 +75,33 @@ JAVA_BIN=${TS_IT_JAVA:-java}
 # load on .../softdependency/SoftServiceDependency. The CI build is the
 # installable one, and it is pinned to a build number rather than
 # lastSuccessfulBuild so that a run is reproducible.
-BKCL_BUILD=2031
-BKCL_JAR=BKCommonLib-2.0.2-SNAPSHOT-${BKCL_BUILD}.jar
+#
+# Overridable from the environment for the same reason as the Paper pins
+# above: validating a fix against a different BKCommonLib build must not mean
+# editing this file and risking the edit being committed in that state. The
+# version is its own variable rather than folded into BKCL_BUILD because it is
+# baked into the jar name (BKCommonLib-<version>-<build>.jar) - a build on a
+# new version line (2.0.3-SNAPSHOT, say) cannot be named by changing the build
+# number alone. BKCL_JAR is overridable on top of that, for the day the naming
+# convention changes and the version/build derivation no longer holds it.
+#
+# As with Paper, the download is verified against whatever BKCL_SHA256 says,
+# default or overridden: there is no separate "skip the check" path, so an
+# override of the version or build without a matching override of the hash
+# does not go quiet - it fails the checksum comparison below with both values
+# in the message. Unlike Paper, there is no registry to cross-check the pin
+# against before spending the download: fill.papermc.io's v3 API publishes a
+# checksum per build that fetch_paper compares the pin to (see the disagree-
+# with-the-registry die below); BKCommonLib's CI exposes no equivalent
+# manifest, only the jar. So overriding BKCL_SHA256 correctly is on whoever
+# does the override - the same trust boundary this script already applies to
+# the Paper pin itself, which is compared to the registry but never replaced
+# by it ("do not paper over it by trusting the registry").
+BKCL_VERSION=${BKCL_VERSION:-2.0.2-SNAPSHOT}
+BKCL_BUILD=${BKCL_BUILD:-2031}
+BKCL_JAR=${BKCL_JAR:-BKCommonLib-${BKCL_VERSION}-${BKCL_BUILD}.jar}
 BKCL_URL=https://ci.mg-dev.eu/job/BKCommonLib/${BKCL_BUILD}/artifact/build/${BKCL_JAR}
-BKCL_SHA256=e7b15d76898834a0b7e8a080982a3f24c69b4a82e87a1e5ec29bce8d17045c46
+BKCL_SHA256=${BKCL_SHA256:-e7b15d76898834a0b7e8a080982a3f24c69b4a82e87a1e5ec29bce8d17045c46}
 
 # A scenario that did not run is a failure, so the count is asserted here rather
 # than read out of the report the run itself produced. It is two halves - the
@@ -135,10 +160,16 @@ BKCL_SHA256=e7b15d76898834a0b7e8a080982a3f24c69b4a82e87a1e5ec29bce8d17045c46
 #          that writes the file, the shop counter that always answered zero, the chunk
 #          data handed out twice, the double chest unlinked by halves, the status stored
 #          before it was recomputed, and a missing per-item key read as a lock.
-# 60 -> 63 with allow-sign-break: the shop the setting leaves behind when its sign goes, the
+# 60 -> 62 with The shared shop, which cannot be loaded at all: a shop with a manager read
+#          back off disk, and one with a member read out of the storage layer's own
+#          in-memory copy by the chunk search. Both paths threw, and every shop this
+#          harness had ever built was owned by one player and shared with nobody - so the
+#          save-and-reload row at site 10 now carries a manager as well, which is where
+#          this class of defect stops being invisible.
+# 62 -> 65 with allow-sign-break: the shop the setting leaves behind when its sign goes, the
 #          same thing for the owner's own break and an admin's, and the control that with the
 #          setting OFF the refusal, the owner's break and the admin's are the ones that shipped.
-EXPECTED_SCENARIOS=63
+EXPECTED_SCENARIOS=65
 
 # Tier 3. The client is not optional: a run that boots a server, plays nothing
 # and exits 0 is the vacuous pass this project treats as the worst possible
@@ -254,14 +285,17 @@ fetch_bkcommonlib() {
 
     say "downloading ${BKCL_URL}"
     curl -fsSL -o "$cached.part" "$BKCL_URL" \
-        || die "could not fetch BKCommonLib build ${BKCL_BUILD}.
+        || die "could not fetch BKCommonLib build ${BKCL_BUILD} (${BKCL_JAR}).
        CI keeps a limited number of builds; if this one has been rotated out,
-       the pin is stale rather than wrong. Update BKCL_BUILD and BKCL_SHA256
-       together."
+       the pin is stale rather than wrong. Update BKCL_VERSION, BKCL_BUILD and
+       BKCL_SHA256 together."
     mv "$cached.part" "$cached"
 
     got=$(sum_of "$cached")
-    [ "$got" = "$BKCL_SHA256" ] || die "downloaded BKCommonLib jar hashes ${got}, expected ${BKCL_SHA256}"
+    [ "$got" = "$BKCL_SHA256" ] || die "downloaded BKCommonLib jar hashes ${got}, expected ${BKCL_SHA256}.
+       If BKCL_VERSION or BKCL_BUILD was overridden without also overriding
+       BKCL_SHA256, that mismatch is why - a version, a build and the checksum
+       it publishes belong together."
     say "BKCommonLib build ${BKCL_BUILD} verified"
 }
 

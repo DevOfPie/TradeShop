@@ -34,6 +34,7 @@ import org.shanerx.tradeshop.data.storage.DataStorage;
 import org.shanerx.tradeshop.data.storage.DataType;
 import org.shanerx.tradeshop.item.ShopItemSide;
 import org.shanerx.tradeshop.item.ShopItemStack;
+import org.shanerx.tradeshop.player.ShopRole;
 import org.shanerx.tradeshop.shop.Shop;
 import org.shanerx.tradeshop.shop.ShopChest;
 import org.shanerx.tradeshop.shoplocation.ShopLocation;
@@ -47,6 +48,7 @@ import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * The rows for the defects a code review reported and nobody ever ran.
@@ -82,10 +84,17 @@ final class DefectRows {
     }
 
     /**
-     * These rows' patch of the world, 20..27. Registered on {@code RealShop}'s
+     * These rows' patch of the world, 20..29. Registered on {@code RealShop}'s
      * constructor, which is the only list of who owns what.
      */
     private static final int FIRST_SITE = 20;
+
+    /**
+     * The two players a shop is shared with. Fixed rather than random so that a
+     * red row names the same value the shop file on disk does.
+     */
+    private static final UUID MANAGER = UUID.fromString("11111111-2222-3333-4444-555555555555");
+    private static final UUID MEMBER = UUID.fromString("66666666-7777-8888-9999-aaaaaaaaaaaa");
 
     static List<IntegrationPlugin.Scenario> rows(IntegrationPlugin plugin) {
         List<IntegrationPlugin.Scenario> rows = new ArrayList<>();
@@ -472,6 +481,99 @@ final class DefectRows {
                             .getSideList(ShopItemSide.COST).size(),
                     "and the file must not have been rewritten without the cost side, or the "
                             + "loss outlives the read that caused it");
+        }));
+
+        // ------------------------------------------------------------------
+        // A shop with anyone on it but its owner cannot be loaded at all.
+        //
+        // Shop.deserialize read `managers` and `members` with
+        // getSerializableList(key, UUID.class), which maps every element of the
+        // stored list through SimplixSerializer.deserialize(element, UUID.class).
+        // That looks the TARGET class up in a registry TradeShop never registers
+        // UUID in, so a list with anything in it threw
+        //
+        //   de.leonhard.storage.internal.exceptions.SimplixValidationException:
+        //   No serializable found for 'UUID'
+        //
+        // An empty list never enters the mapping function, and every shop this
+        // harness built had neither a manager nor a member - which is why two
+        // units about shop loading passed over it. The plugin has commands to add
+        // both, so every shop anybody has ever shared is a shop the server cannot
+        // load: it stops trading, and its owner's evidence is that it "just
+        // stopped".
+        //
+        // Reachable at tier 1 as well and asserted there too. It is here because
+        // the two rows below are what an operator actually does - a shop shared
+        // from the chat bar, then a restart, then /tradeshop find - and because a
+        // real server is where the in-memory read path exists at all.
+        // ------------------------------------------------------------------
+
+        rows.add(new IntegrationPlugin.Scenario("aShopWithAManagerComesBackOffDisk", () -> {
+            RealShop scene = new RealShop(plugin, FIRST_SITE + 8);
+            scene.placeChestAndSign();
+            scene.createShopByCommand("1 DIAMOND", "1 EMERALD");
+
+            ShopLocation where = scene.get(() -> new ShopLocation(scene.signBlock().getLocation()));
+
+            Assert.that(scene.get(() -> Shop.loadShop(where).addUser(MANAGER, ShopRole.MANAGER)),
+                    "precondition: the owner could add a manager to their own shop");
+
+            // The restart, without restarting: a brand new DataStorage has an empty
+            // shopCache, so this read comes off the file - the path a starting
+            // server takes for every shop it has.
+            Shop reloaded;
+            try {
+                reloaded = scene.get(() -> new DataStorage(DataType.FLATFILE).loadShopFromSign(where));
+            } catch (Throwable t) {
+                throw new AssertionError("a shop that has been shared with one other player cannot "
+                        + "be read back off disk at all, so it is gone the next time the server "
+                        + "starts: " + rootCause(t), t);
+            }
+
+            Assert.that(reloaded != null, "a shop with a manager should still be on disk");
+            Assert.that(reloaded.getUsersUUID(ShopRole.MANAGER).contains(MANAGER),
+                    "and the manager the owner added must still be on it");
+            Assert.equal(1, reloaded.getSideList(ShopItemSide.PRODUCT).size(),
+                    "and the rest of the shop must come back with them");
+        }));
+
+        rows.add(new IntegrationPlugin.Scenario("aShopWithAMemberIsFoundByTheChunkSearch", () -> {
+            RealShop scene = new RealShop(plugin, FIRST_SITE + 9);
+            scene.placeChestAndSign();
+            scene.createShopByCommand("1 DIAMOND", "1 EMERALD");
+
+            ShopLocation where = scene.get(() -> new ShopLocation(scene.signBlock().getLocation()));
+
+            Assert.that(scene.get(() -> Shop.loadShop(where).addUser(MEMBER, ShopRole.MEMBER)),
+                    "precondition: the owner could add a member to their own shop");
+
+            // The OTHER read path, and it holds different objects. The save put the
+            // map Shop.serialize built straight into the storage layer's in-memory
+            // document, where the list still holds java.util.UUID objects rather
+            // than the strings the file holds. Everything reading that chunk is
+            // answered out of it until the file is re-read.
+            //
+            // Save and search inside ONE task, for the reason
+            // ConfigAndMetricsRows.searchingAChunkFindsTheShopsInIt gives: a
+            // ChunkUnloadEvent landing between them drops the cached chunk data and
+            // turns this into a second reading off disk, which is a coin toss the
+            // row must not be decided by.
+            List<Shop> found;
+            try {
+                found = Sync.get(plugin, () -> {
+                    tradeShop().getDataStorage().saveShop(Shop.loadShop(where));
+                    return tradeShop().getDataStorage().getMatchingShopsInChunk(
+                            scene.signBlock().getChunk().getChunkSnapshot(), false, null, null);
+                });
+            } catch (Throwable t) {
+                throw new AssertionError("/tradeshop find throws in any chunk holding a shop that "
+                        + "has been shared, because the shop is read back out of the storage "
+                        + "layer's own in-memory copy of what was just written: " + rootCause(t), t);
+            }
+
+            Assert.equal(1, found.size(), "searching the chunk must find the shared shop");
+            Assert.that(found.get(0).getUsersUUID(ShopRole.MEMBER).contains(MEMBER),
+                    "and it must come back with the member on it");
         }));
 
         return rows;
