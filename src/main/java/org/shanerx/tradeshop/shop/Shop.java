@@ -485,6 +485,20 @@ public class Shop {
 
     /**
      * Saves the shop to file
+     *
+     * <p>{@link #updateStatus()} runs before the shop is handed to storage, not
+     * after. {@link #updateSign()} recomputes status on its way to line four
+     * ({@code updateSignLines} :592), and it used to be the only thing that did -
+     * from <em>after</em> the write - so what reached the file was the status the
+     * shop had before this save. A shop built from the chat bar was stored
+     * {@code INCOMPLETE}, the value the field starts at, however complete it
+     * actually was.
+     *
+     * <p>That value is read rather than recomputed by everything that comes at a
+     * shop through storage: {@code DataStorage.getMatchingShopsInChunk} loads with
+     * {@code loadASync}, which fixes a shop up without touching its status, and
+     * {@code ShopUser.findProximityShop} is {@code /tradeshop find}. So the sign in
+     * the world and the answer that command gives disagreed about the same shop.
      */
     public void saveShop() {
         if (aSync) {
@@ -493,8 +507,9 @@ public class Shop {
         }
 
         updateFullTradeCount();
+        updateStatus();
         plugin.getDataStorage().saveShop(this);
-        if (!aSync) updateSign();
+        updateSign();
         updateUserFiles();
     }
 

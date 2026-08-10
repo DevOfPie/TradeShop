@@ -187,8 +187,18 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
         // onto it, and that write is done by the packet handler that fired
         // SignChangeEvent, not by the event bus. A harness that fires the event
         // itself is not a packet handler, so the block stays blank, the sign is
-        // never updated, the status never leaves OUT_OF_STOCK, and a click on
-        // the sign is not recognised as a click on a shop.
+        // never updated, and a click on the sign is not recognised as a click on
+        // a shop.
+        //
+        // The shop's STATUS is no longer part of that chain. It used to be:
+        // updateStatus() was reached only through updateSign(), so a shop whose
+        // sign could not be written was stuck on whatever status it had last -
+        // and this scenario asserted OUT_OF_STOCK over ten available trades to
+        // say so. Shop.saveShop() now recomputes status before it writes, which
+        // is the fix for a shop being STORED with a status it does not have, and
+        // a shop that is stocked and complete reports itself open whether or not
+        // anything managed to write its sign. The blocker below is what is left:
+        // a blank block, and a click that lands on nothing.
         //
         // Copying the event's finished lines onto the block is exactly the
         // workaround tier 1 carries, and reintroducing it here is the one thing
@@ -220,10 +230,11 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
 
             Assert.that(scene.get(() -> shop.getShopSign()) == null,
                     "getShopSign() is null while the block is blank, which is what stops the "
-                            + "status from ever being recomputed");
-            Assert.equal(ShopStatus.OUT_OF_STOCK, shop.getStatus(),
-                    "ten trades are available and the shop still says out of stock, because "
-                            + "updateStatus() is only reached through the sign");
+                            + "sign from ever being written");
+            Assert.equal(ShopStatus.OPEN, shop.getStatus(),
+                    "ten trades are available, so the shop is open - a shop's status must not "
+                            + "depend on whether anything managed to write its sign, which is what "
+                            + "it did while updateStatus() was reached only through updateSign()");
             Assert.equal("", scene.signLines()[3],
                     "and the sign the server stored is still blank");
 
