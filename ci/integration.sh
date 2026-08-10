@@ -128,12 +128,14 @@ BKCL_SHA256=e7b15d76898834a0b7e8a080982a3f24c69b4a82e87a1e5ec29bce8d17045c46
 #          that a return to the Paper-only guard fails rather than passes quietly.
 # 49 -> 52 with The sign side: a header written on the BACK of a sign, the player who has
 #          to be told it did nothing, and the front-side control that must not move.
-# 52 -> 58 with The operator's config: every map-valued setting an ordinary boot reverts,
-#          the two counts and the search that read a chunk file's fields as though they
-#          were shops, the half of a double chest that unlinking leaves behind, and the
-#          status a shop writes to the store one update out of date.
-#          See it/ConfigAndMetricsRows.java.
-EXPECTED_SCENARIOS=58
+# 52 -> 54 with The broken sign: a shop stored against a sign whose text no longer reads as
+#          one, which today outlives the only block that could have found it again, and the
+#          control that the ordinary sign break - a shop's and a plain sign's - does not move.
+# 54 -> 60 with The config and metrics rows: an operator's tuned settings surviving a boot
+#          that writes the file, the shop counter that always answered zero, the chunk
+#          data handed out twice, the double chest unlinked by halves, the status stored
+#          before it was recomputed, and a missing per-item key read as a lock.
+EXPECTED_SCENARIOS=60
 
 # Tier 3. The client is not optional: a run that boots a server, plays nothing
 # and exits 0 is the vacuous pass this project treats as the worst possible

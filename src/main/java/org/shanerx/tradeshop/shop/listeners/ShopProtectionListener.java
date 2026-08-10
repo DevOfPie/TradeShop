@@ -329,7 +329,11 @@ public class ShopProtectionListener implements Listener {
             }
             event.setCancelled(true);
             player.sendMessage(Message.NO_TS_DESTROY.getPrefixed());
-        } else if (!block.getType().name().contains("SIGN")) {
+
+        } else if (block.getType().name().contains("SIGN")) {
+            removeShopStoredAgainst(block);
+
+        } else {
             boolean ret = true;
             for (BlockFace face : Arrays.asList(BlockFace.UP, BlockFace.NORTH, BlockFace.EAST, BlockFace.SOUTH, BlockFace.WEST)) {
                 Block temp = block.getRelative(face);
@@ -345,6 +349,82 @@ public class ShopProtectionListener implements Listener {
             event.setCancelled(true);
             player.sendMessage(Message.DESTROY_SHOP_SIGN_FIRST.getPrefixed());
         }
+    }
+
+    /**
+     * Drops the shop stored against a sign that is being broken and no longer
+     * reads as one, so that the record does not outlive the only block that
+     * could have found it again.
+     *
+     * <p>{@link #onBlockBreak} above decides whether to clean a shop up by asking
+     * {@link ShopType#isShop(Block)}, which is the block's <em>front</em> lines -
+     * {@code isShop(Block)} hands the block state to
+     * {@link ShopType#getType(Sign)}, and that is line 0 of the front. So the
+     * question the listener asks is "does this block still READ as a shop" and
+     * the question it needs answered is "is a shop STORED against this block".
+     * This method is the second question, asked where the first has already said
+     * no.
+     *
+     * <h2>Why the answer is to remove it rather than to protect it</h2>
+     * A shop whose sign no longer names it is already unreachable, in every
+     * direction. It cannot be traded with, because {@code ShopTradeListener}
+     * reads the front. It cannot be repaired, because {@link Shop#getShopSign()}
+     * is the same test, so {@link Shop#updateSign()} can never write the header
+     * back. It cannot be removed by its owner, because every removal path starts
+     * from a sign. What it can still do is count against its owner's limit and
+     * against {@code MAX_SHOPS_PER_CHUNK}, and hold its storage block linked -
+     * which is hopper protection and a break refusal enforced on behalf of a shop
+     * nobody can use. Once the block is gone, this event is the last thing that
+     * will ever mention that location.
+     *
+     * <p>Protecting the block instead was the other option and it is worse: the
+     * plugin would be refusing to let a player break a sign that reads as an
+     * ordinary sign, for a shop it will not show them, with no way for anyone to
+     * clear it.
+     *
+     * <h2>What is NOT done here</h2>
+     * Nothing already on disk is swept. This runs when a block breaks and touches
+     * only the record at that block; a shop whose sign an explosion, a world edit
+     * or a rollback took is left exactly where it is, because a sweep cannot tell
+     * that shop from one whose chunk is merely unloaded and would delete both.
+     * Removing those is a decision for whoever owns the plugin, and the argument
+     * for making it is not "the sign is missing" - it is a report from an
+     * operator who wants it.
+     *
+     * <p>{@link PlayerShopDestroyEvent} is not fired. It is cancellable, and a
+     * listener that cancelled it would recreate the orphan this method exists to
+     * prevent - the block breaks either way. It is also an event about a shop no
+     * consumer of it could have seen: every path that hands a shop to another
+     * plugin reads the front of the sign, which is what stopped naming this one.
+     *
+     * <h2>Cost</h2>
+     * One storage lookup, and only for a block that is a sign and has already
+     * failed {@code ShopType.isShop}. Nothing on the hopper path -
+     * {@link #onInventoryMoveItem} is untouched and a hopper breaks no blocks -
+     * and nothing on the ordinary break of a non-sign block, which reaches the
+     * branch below this one without asking. The lookup itself is a hit in
+     * {@code DataStorage}'s shop cache for any shop the server has touched, and
+     * on a miss it is one read of the chunk's data file, which {@code DataStorage}
+     * then keeps. A sign break is a player action at human rate; the plugin
+     * already does the same read per chunk for every chunk in range of
+     * {@code /tradeshop search}.
+     */
+    private void removeShopStoredAgainst(Block signBlock) {
+        Shop stored = Shop.loadShop(new ShopLocation(signBlock.getLocation()));
+
+        if (stored == null) return;
+
+        // Shop.remove takes the chest linkage with it - DataStorage.removeShop
+        // drops every linkage entry pointing at this shop - and purges the shop
+        // from its users' files, so it stops counting against their limits. The
+        // storage block is left alone: its contents are the owner's items and a
+        // broken sign is not consent to touch them.
+        stored.remove();
+
+        plugin.getDebugger().log("ShopProtectionListener: removed the shop stored at "
+                + stored.getShopLocationAsSL() + ", whose sign was broken while its text no longer "
+                + "read as a shop. Its storage block, if any, has been unlinked and its contents "
+                + "left untouched.", DebugLevels.PROTECTION);
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)

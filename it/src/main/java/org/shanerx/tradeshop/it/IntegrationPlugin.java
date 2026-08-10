@@ -21,11 +21,13 @@ import org.bukkit.ChatColor;
 import org.bukkit.Material;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
+import org.bukkit.block.Sign;
 import org.bukkit.block.sign.Side;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.SignChangeEvent;
 import org.bukkit.event.server.ServerLoadEvent;
 import org.bukkit.inventory.ItemStack;
@@ -450,6 +452,142 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
             Assert.that(scene.ownerWasTold().stream()
                             .anyMatch(line -> line.contains(strip(Message.SUCCESSFUL_SETUP.toString()))),
                     "and the player is still told the shop was set up");
+        }));
+
+        // ------------------------------------------------------------------
+        // Breaking the sign a shop is stored against.
+        //
+        // ShopProtectionListener.onBlockBreak:282 decides whether to clean a
+        // shop up by asking ShopType.isShop(Block), and that call reads the
+        // block's FRONT lines - ShopType.isShop(Block):60-66 hands the block
+        // state to getType(Sign):68-77, which is line 0 of the front. So the
+        // question the listener asks is "does this block still READ as a shop",
+        // and the question it needs answered is "is a shop STORED against this
+        // block". Where the two disagree, the sign is broken, the block becomes
+        // air, and the record survives with nothing left that can reach it:
+        //   - no trade, because ShopTradeListener reads the front too,
+        //   - no repair, because Shop.getShopSign:515-523 is the same test, so
+        //     Shop.updateSign can never write the header back,
+        //   - no removal, because every removal path starts from a sign,
+        // while the shop still counts against its owner's limit and against
+        // MAX_SHOPS_PER_CHUNK, and its chest still reads as a shop chest to
+        // ShopChest.isShopChest - which is hopper protection and a break refusal
+        // on a chest whose shop no longer exists.
+        //
+        // HOW THE TWO COME APART. A back-side header used to store a shop the
+        // front never showed; that creation is refused as of the rows above, but
+        // records made before it are still out there. Every other route is
+        // something outside this plugin rewriting the sign: a rollback, a world
+        // edit, another plugin, an operator changing the configured shop header
+        // under signs that already exist. The row below takes the general route
+        // rather than the back-side one, because the back-side one is now shut
+        // and this defect is not.
+        //
+        // WHAT IS NOT BEING BUILT, and it is a decision rather than an omission:
+        // there is no startup sweep and nothing already on disk is deleted. A
+        // sweep would remove the shops whose signs an explosion or a rollback
+        // took, which is data deletion on the strength of a guess. Records
+        // already orphaned stay exactly where they are; what changes is that no
+        // new one is made.
+        scenarios.add(new Scenario("aShopStoredAgainstASignIsNotLeftBehindWhenThatSignIsBroken", () -> {
+            RealShop scene = new RealShop(this, 40);
+            scene.placeChestAndSign();
+            scene.createShopByCommand("1 DIAMOND", "1 EMERALD");
+
+            ShopLocation where = scene.get(() -> new ShopLocation(scene.signBlock().getLocation()));
+
+            Assert.that(scene.get(() -> Shop.loadShop(where)) != null,
+                    "precondition: the shop is stored before anything happens to its sign");
+            Assert.that(scene.get(() -> ShopChest.isShopChest(scene.chestBlock())),
+                    "precondition: and the chest under it is linked to it");
+
+            // Something outside TradeShop rewrites the front of the sign. A
+            // rollback, a world edit and another plugin all arrive here the same
+            // way, and the plugin cannot undo it: Shop.updateSign goes through
+            // getShopSign, which returns null for a block that does not already
+            // read as a shop, so the header is never written back.
+            scene.run(() -> {
+                Sign sign = (Sign) scene.signBlock().getState();
+                sign.getSide(Side.FRONT).setLine(0, "salvaged");
+                sign.update(true, false);
+            });
+
+            Assert.that(!scene.get(() -> ShopType.isShop(scene.signBlock())),
+                    "precondition: the block no longer reads as a shop sign, which is the whole "
+                            + "of what onBlockBreak asks about");
+            Assert.that(scene.get(() -> Shop.loadShop(where)) != null,
+                    "precondition: and the shop is still stored against it, which is what "
+                            + "onBlockBreak does not ask about");
+
+            // The break, through the server's own listeners. The block is set to
+            // air afterwards because that is what the server does next, and it
+            // is the state the record is left pointing at.
+            scene.run(() -> {
+                Bukkit.getPluginManager().callEvent(new BlockBreakEvent(scene.signBlock(), scene.owner()));
+                scene.signBlock().setType(Material.AIR, false);
+            });
+
+            Assert.that(scene.get(() -> Shop.loadShop(where)) == null,
+                    "breaking the sign a shop is stored against must take the record with it. "
+                            + "ShopProtectionListener.onBlockBreak:282 asks ShopType.isShop(block), "
+                            + "which is the block's front lines, so a block whose text no longer "
+                            + "reads as a shop falls through every branch of that method and the "
+                            + "stored shop outlives the only block that could ever have found it "
+                            + "again - counting against its owner's limit and against the chunk's, "
+                            + "and holding its chest linked, forever");
+
+            Assert.that(!scene.get(() -> ShopChest.isShopChest(scene.chestBlock())),
+                    "and the chest must not go on reading as a shop chest once the shop is gone: "
+                            + "a linkage that outlives its shop is hopper protection and a break "
+                            + "refusal enforced on behalf of nothing");
+        }));
+
+        // The control, and the reason the row above needs one: the new question
+        // is asked on every sign break, so the two paths that already worked
+        // have to be shown to still work. Green before the fix and after it.
+        scenarios.add(new Scenario("breakingAnOrdinaryShopSignStillBehavesExactlyAsBefore", () -> {
+            RealShop shopScene = new RealShop(this, 41);
+            shopScene.placeChestAndSign();
+            shopScene.createShopByCommand("1 DIAMOND", "1 EMERALD");
+
+            ShopLocation where = shopScene.get(() -> new ShopLocation(shopScene.signBlock().getLocation()));
+            Assert.that(shopScene.get(() -> Shop.loadShop(where)) != null,
+                    "precondition: the shop is stored");
+            Assert.that(shopScene.get(() -> ShopType.isShop(shopScene.signBlock())),
+                    "precondition: and its sign still reads as one, which is the ordinary case");
+
+            BlockBreakEvent ownerBreak = shopScene.get(() -> {
+                BlockBreakEvent event = new BlockBreakEvent(shopScene.signBlock(), shopScene.owner());
+                Bukkit.getPluginManager().callEvent(event);
+                return event;
+            });
+
+            Assert.that(!ownerBreak.isCancelled(),
+                    "an owner breaking their own shop sign is allowed to, and always was");
+            Assert.that(shopScene.get(() -> Shop.loadShop(where)) == null,
+                    "and the shop goes with it, through the branch that was already there");
+            Assert.that(!shopScene.get(() -> ShopChest.isShopChest(shopScene.chestBlock())),
+                    "and the chest is unlinked, as it already was");
+
+            // A sign that is nobody's shop. The new question is asked here too -
+            // it is asked of every sign - and the answer has to be that nothing
+            // happens at all.
+            RealShop plain = new RealShop(this, 42);
+            plain.placeChestAndSign();
+            Assert.that(!plain.get(() -> ShopType.isShop(plain.signBlock())),
+                    "precondition: a blank sign is not a shop");
+
+            BlockBreakEvent plainBreak = plain.get(() -> {
+                BlockBreakEvent event = new BlockBreakEvent(plain.signBlock(), plain.owner());
+                Bukkit.getPluginManager().callEvent(event);
+                return event;
+            });
+
+            Assert.that(!plainBreak.isCancelled(),
+                    "breaking an ordinary sign must stay something a player can simply do");
+            Assert.that(plain.get(() -> Shop.loadShop(new ShopLocation(plain.signBlock().getLocation()))) == null,
+                    "and must not conjure a shop record out of the lookup that was made to "
+                            + "check for one");
         }));
 
         // The signs a shop can go on. These three are here rather than at tier 1

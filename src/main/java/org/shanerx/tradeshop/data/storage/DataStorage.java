@@ -356,24 +356,34 @@ public class DataStorage {
     private final Map<String, JsonShopData> chunkDataCache = new HashMap<>();
 
     /**
-     * One live view of a chunk's shop file, however many times it is asked for.
+     * The one handle on a chunk's shops, cached per chunk.
      *
-     * <p>The miss path used to cache one {@link JsonShopData} and return a second one
-     * built from the same file, so no caller ever held the object the cache was
-     * handing out. That matters because a {@code JsonShopData} is not a handle onto a
-     * file, it is a copy of one: it reads the whole chunk into memory when it is
-     * constructed and writes the whole of that memory back on every save. Two of them
-     * over one file are two copies of the same shops, and a save through either
-     * writes its own copy over whatever the other put there - the same shape as the
-     * shop that came back off disk with an empty cost side.
+     * <p><b>The instance that is cached is the instance that is returned.</b> It
+     * used to cache one and hand back a second, freshly constructed from the same
+     * file, so the first caller after a cache miss worked on a copy nothing else
+     * could see. Every write that caller made - a save, or a remove - landed on
+     * disk and never on the cached object, and the next reader was answered out of
+     * the cached object.
      *
-     * <p>The same reasoning as {@code shopCache} one level up: one live object per
-     * thing, which is what the rest of the plugin assumes when it loads something,
-     * changes it and saves it.
+     * <p>That is not theoretical and it is not only a wasted file read.
+     * {@code ChunkUnloadListener} drops a chunk's entry on every unload, so any
+     * shop operation is one unload away from being the first call after a miss. A
+     * shop removed by that call is written out of its file and stays in memory,
+     * where the next {@link #loadShopFromSign} finds it and hands it back alive -
+     * and anything that then saves it writes it back to disk. Measured on Paper
+     * 1.21.11 build 132 while proving that breaking a sign removes the shop stored
+     * against it: the chunk's file was left holding {@code {}} and the shop still
+     * loaded.
      */
     protected ShopConfiguration getShopData(ShopChunk chunk) {
         if (dataType == DataType.FLATFILE) {
-            return chunkDataCache.computeIfAbsent(chunk.serialize(), serialized -> new JsonShopData(chunk));
+            String serializedChunk = chunk.serialize();
+            if (chunkDataCache.containsKey(serializedChunk))
+                return chunkDataCache.get(serializedChunk);
+            JsonShopData data = new JsonShopData(chunk);
+            chunkDataCache.put(serializedChunk, data);
+            return data;
+
         }
 
         throw new NotImplementedException("Data storage type " + dataType + " has not been implemented yet.");
