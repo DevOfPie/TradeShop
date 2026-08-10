@@ -421,6 +421,12 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
         // cheaper tier would have lied about it. See ItemMatrix.
         scenarios.addAll(ItemMatrix.rows(this));
 
+        // The two per-item comparison toggles a mock cannot answer honestly. The
+        // other fourteen are switched off and back on in the tier-1 matrix; these
+        // need a BlockStateMeta and a real shop file respectively. See
+        // SettingToggleRows.
+        scenarios.addAll(SettingToggleRows.rows(this));
+
         // The reported defects and the one found beside them, in their own file
         // for the same reason as
         // the matrix: a suite rather than a scenario, and every row carries the
