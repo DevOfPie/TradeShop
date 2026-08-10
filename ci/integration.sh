@@ -160,7 +160,13 @@ BKCL_SHA256=${BKCL_SHA256:-e7b15d76898834a0b7e8a080982a3f24c69b4a82e87a1e5ec29bc
 #          that writes the file, the shop counter that always answered zero, the chunk
 #          data handed out twice, the double chest unlinked by halves, the status stored
 #          before it was recomputed, and a missing per-item key read as a lock.
-EXPECTED_SCENARIOS=60
+# 60 -> 62 with The shared shop, which cannot be loaded at all: a shop with a manager read
+#          back off disk, and one with a member read out of the storage layer's own
+#          in-memory copy by the chunk search. Both paths threw, and every shop this
+#          harness had ever built was owned by one player and shared with nobody - so the
+#          save-and-reload row at site 10 now carries a manager as well, which is where
+#          this class of defect stops being invisible.
+EXPECTED_SCENARIOS=62
 
 # Tier 3. The client is not optional: a run that boots a server, plays nothing
 # and exits 0 is the vacuous pass this project treats as the worst possible

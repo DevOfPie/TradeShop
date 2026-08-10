@@ -271,10 +271,10 @@ public class Shop {
                     case "owner":
                         break; // Already used so skip
                     case "managers":
-                        shop.managers = new HashSet<>(data.getSerializableList(key, UUID.class));
+                        shop.managers = deserializeUsers(data, key);
                         break;
                     case "members":
-                        shop.members = new HashSet<>(data.getSerializableList(key, UUID.class));
+                        shop.members = deserializeUsers(data, key);
                         break;
                     case "product":
                         deserializeSide(data, key).forEach((itm) -> shop.addSideItem(ShopItemSide.PRODUCT, itm));
@@ -315,6 +315,67 @@ public class Shop {
         }
 
         return shop;
+    }
+
+    /**
+     * Reads a shop's managers or its members out of its file.
+     *
+     * <p>Both keys used to be read with {@code data.getSerializableList(key,
+     * UUID.class)}, which maps every element of the stored list through
+     * {@code SimplixSerializer.deserialize(element, UUID.class)}. That call looks
+     * the <em>target</em> class up in a registry nothing in this plugin registers
+     * {@code UUID} in, so it threw
+     *
+     * <pre>
+     * SimplixValidationException: No serializable found for 'UUID'
+     * </pre>
+     *
+     * for any list with something in it - and an empty list, which never enters the
+     * mapping function at all, was the only case that worked. Every shop anyone had
+     * shared was therefore a shop the server could not load: it stops trading, and
+     * its owner's evidence is that it "just stopped".
+     *
+     * <h2>Why the parse is here rather than a registered serializable</h2>
+     * Registering a {@code UUID} serializable with SimplixStorage would fix this
+     * key and silently change how every other {@code UUID} in the plugin round
+     * trips, including ones written by builds that never had it. Two keys need this
+     * and both are here, so the parse is here.
+     *
+     * <h2>The two forms, and why both are read</h2>
+     * <b>Nothing about what is written changes</b>, and nothing on disk needs
+     * migrating: {@code serialize()} puts an {@code ArrayList<UUID>} into the
+     * document, and the JSON writer answers {@code toString()} for anything whose
+     * package starts with {@code java.}, so a file has always held
+     * {@code "managers": ["11111111-..."]} - an array of strings. What differs is
+     * <em>where</em> the read comes from. The storage layer hands the next reader of
+     * a chunk the very map this class gave it until the file is re-read, and in that
+     * map the elements are still {@code java.util.UUID} objects. So both are
+     * accepted: a string is parsed, a UUID is taken as it is.
+     *
+     * <p>An element that is neither is dropped with a log rather than failing the
+     * whole load, on the same reasoning as {@link #deserializeShopSettings}: one
+     * unreadable name costs a shop one of its staff, and refusing to load costs the
+     * owner the shop.
+     */
+    private static Set<UUID> deserializeUsers(FlatFileSection data, String key) {
+        Set<UUID> users = new HashSet<>();
+
+        for (Object stored : data.getList(key)) {
+            if (stored instanceof UUID) {
+                users.add((UUID) stored);
+                continue;
+            }
+
+            try {
+                users.add(UUID.fromString(String.valueOf(stored)));
+            } catch (IllegalArgumentException notAUuid) {
+                TradeShop.getPlugin().getVarManager().getDebugger().log(
+                        "Shop user '" + stored + "' under '" + key + "' is not a UUID and was skipped while loading a shop.",
+                        DebugLevels.DATA_ERROR);
+            }
+        }
+
+        return users;
     }
 
     /**
@@ -383,9 +444,9 @@ public class Shop {
         // and that is a correctness fix rather than defensive copying. This map is
         // not only written to a file: ShopConfiguration.save puts it straight into
         // the storage layer's IN-MEMORY document, which is what the next reader of
-        // that chunk is answered out of until the file is re-read. deserialize
-        // below reads both keys with getSerializableList, whose first act is
-        // `(List) get(key)` - so a Set read back before the reload threw
+        // that chunk is answered out of until the file is re-read. deserializeUsers
+        // asks for a List - as getSerializableList did before it - so a Set read
+        // back before the reload threw
         //
         //   java.lang.ClassCastException: class java.util.HashSet cannot be cast
         //   to class java.util.List
@@ -394,6 +455,13 @@ public class Shop {
         // only caller of that reached from ShopUser.findProximityShop, which is
         // /tradeshop find. A list is what the file holds and what the reader
         // wants, so it is what is stored.
+        //
+        // The UUIDs themselves are handed over as they are and are NOT stringified
+        // here. What reaches a file is an array of strings either way - the JSON
+        // writer answers toString() for anything in a java.* package - so writing
+        // strings would change nothing on disk while making this map disagree with
+        // every shop file written before it. deserializeUsers reads both forms;
+        // see its comment for which read path sees which.
         map.put("managers", new ArrayList<>(managers));
         map.put("members", new ArrayList<>(members));
         map.put("shopType", shopType.name());

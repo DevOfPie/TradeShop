@@ -79,7 +79,7 @@ final class RealShop {
      *   <tr><td>1..5, 12..18, 50..52</td><td>{@link IntegrationPlugin}, inline rows</td></tr>
      *   <tr><td>7</td><td>{@link ClientPhase} - <b>reserved, see below</b></td></tr>
      *   <tr><td>10..11</td><td>{@link ItemMatrix}</td></tr>
-     *   <tr><td>20..27</td><td>{@link DefectRows}</td></tr>
+     *   <tr><td>20..29</td><td>{@link DefectRows}</td></tr>
      *   <tr><td>30..39</td><td>{@link IssueRows}</td></tr>
      *   <tr><td>40..46</td><td>{@link ConfigAndMetricsRows}</td></tr>
      *   <tr><td>60</td><td>{@link SettingToggleRows}</td></tr>
