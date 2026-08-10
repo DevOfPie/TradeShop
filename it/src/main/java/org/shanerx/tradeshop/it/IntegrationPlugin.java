@@ -553,6 +553,13 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
         // row say where it came from. After DefectRows because one of those
         // rewrites config.yml.
         scenarios.addAll(IssueRows.rows(this));
+
+        // What a config save does to an operator's file, what the shop counter
+        // reports, and the two storage defects beside them. Last of all: the
+        // first of these rows stands an operator's edited config.yml up on disk
+        // and reloads the plugin's settings from it, which is a heavier version
+        // of the reason DefectRows already runs late.
+        scenarios.addAll(ConfigAndMetricsRows.rows(this));
     }
 
     /**
