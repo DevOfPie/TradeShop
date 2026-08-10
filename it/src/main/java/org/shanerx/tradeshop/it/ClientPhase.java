@@ -52,6 +52,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.stream.Stream;
 
 /**
  * Tier 3: a real client does what a person does, and this class watches it.
@@ -110,16 +111,29 @@ final class ClientPhase implements Listener, CommandExecutor {
      * <p>Declared up front because "the suite ran fewer scenarios than it has" is
      * the failure a report written by the run itself cannot catch.
      */
-    static final List<String> STEPS = List.of(
+    private static final List<String> SHOP_STEPS = List.of(
             "aRealClientIsLoggedIn",
             "aClientTypedSignEditCreatesACompleteShop",
             "aClientStockedShopReportsItselfOpen",
             "aRealPlayerSessionTradesWithTheShop",
             "theEditGuiOpensAndItsClicksReachTheShop",
             "theWhatGuiShowsWhatTheShopTrades",
-            // Last on purpose: it replaces the shop's product, so every step above
-            // it would be asserting a shop this one has already changed.
+            // Last of the shop flows on purpose: it replaces the shop's product, so
+            // every step above it would be asserting a shop this one has already
+            // changed.
             "aHeldComplexItemBecomesTheProductAndRenders");
+
+    /**
+     * The shop flows first, then the sign-edit probe.
+     *
+     * <p>The probe builds its own sites and never touches the shop the steps above
+     * assert about, but it does put a client through a vanilla sign editor and
+     * leaves dye on a sign, and a step that runs after that is a step reading a
+     * world something else has been playing with. Order is the cheap way to keep
+     * the two halves independent. See {@link SignEditProbe}.
+     */
+    static final List<String> STEPS = Stream.concat(SHOP_STEPS.stream(), SignEditProbe.STEPS.stream())
+            .toList();
 
     /** The step name that is not a step: it closes the run. */
     private static final String FINISH = "finish";
@@ -173,6 +187,9 @@ final class ClientPhase implements Listener, CommandExecutor {
     private Block chestBlock;
     private Block signBlock;
 
+    /** The sign-edit probe, which owns its own sites, listeners and steps. */
+    private final SignEditProbe probe;
+
     /**
      * Every inventory title the server opened for a player, in order.
      *
@@ -187,6 +204,7 @@ final class ClientPhase implements Listener, CommandExecutor {
 
     ClientPhase(IntegrationPlugin plugin) {
         this.plugin = plugin;
+        this.probe = new SignEditProbe(plugin);
     }
 
     // ------------------------------------------------------------------
@@ -200,6 +218,11 @@ final class ClientPhase implements Listener, CommandExecutor {
      */
     void wire() {
         Bukkit.getPluginManager().registerEvents(this, plugin);
+        // Registered here rather than when tier 3 begins: the probe has to be on
+        // the bus before the first sign is placed, because its first question is
+        // whether the event fires for a sign edit nothing arranged for it.
+        Bukkit.getPluginManager().registerEvents(probe, plugin);
+        probe.logServerIdentity();
         if (plugin.getCommand("itstep") == null) {
             throw new IllegalStateException("it/plugin.yml does not declare the itstep command, "
                     + "so a bot has no way to report what it did");
@@ -241,6 +264,8 @@ final class ClientPhase implements Listener, CommandExecutor {
 
         chestBlock.setType(Material.AIR, false);
         signBlock.setType(Material.AIR, false);
+
+        probe.prepare(signBlock);
     }
 
     private void deadlineExpired() {
@@ -320,6 +345,23 @@ final class ClientPhase implements Listener, CommandExecutor {
             // chosen to be the ones the network item codec has to carry: a name, a
             // lore line and an enchantment.
             player.getInventory().addItem(COMPLEX_PRODUCT.clone());
+            // The sign-edit probe's materials, handed over for the same reason as
+            // everything above: what is under test is what the client does with
+            // them. Two chests and three signs are the three probe sites; the dye
+            // and the glow ink sac are the two ways of changing a sign that never
+            // touch its text.
+            player.getInventory().addItem(new ItemStack(Material.CHEST, 2));
+            player.getInventory().addItem(new ItemStack(Material.OAK_SIGN, 3));
+            player.getInventory().addItem(new ItemStack(Material.RED_DYE, 1));
+            player.getInventory().addItem(new ItemStack(Material.GLOW_INK_SAC, 1));
+            // The second dye is the control for the interact deny: a colour the
+            // sign is not, so that "it did not land" is visible.
+            player.getInventory().addItem(new ItemStack(Material.BLUE_DYE, 1));
+            // A sign that already carries its text, which is what ctrl-picking a
+            // written sign puts in a player's hand. A different wood on purpose,
+            // so the client asks for this one by name rather than by whichever
+            // oak sign is left in the stack.
+            player.getInventory().addItem(SignEditProbe.pickedSign());
         } else if (BUYER_BOT.equals(player.getName())) {
             // Two blocks south of the sign, looking north at it.
             where = new Location(chestBlock.getWorld(), SITE_X + 0.5, chestBlock.getY(), SITE_Z + 2.5, 0f, 0f);
@@ -333,6 +375,9 @@ final class ClientPhase implements Listener, CommandExecutor {
         player.teleport(where);
         player.sendMessage("TS-IT SITE " + chestBlock.getX() + " " + chestBlock.getY() + " "
                 + chestBlock.getZ() + " " + ShopType.TRADE.toHeader());
+        if (OWNER_BOT.equals(player.getName())) {
+            probe.siteMessages().forEach(player::sendMessage);
+        }
         plugin.getLogger().info("client " + player.getName() + " joined from "
                 + (player.getAddress() == null ? "nowhere" : player.getAddress().toString())
                 + ", placed at " + where.toVector() + " holding "
@@ -489,7 +534,10 @@ final class ClientPhase implements Listener, CommandExecutor {
             case "theEditGuiOpensAndItsClicksReachTheShop" -> theEditGuiOpensAndItsClicksReachTheShop();
             case "theWhatGuiShowsWhatTheShopTrades" -> theWhatGuiShowsWhatTheShopTrades();
             case "aHeldComplexItemBecomesTheProductAndRenders" -> aHeldComplexItemBecomesTheProductAndRenders();
-            default -> throw new AssertionError("no body is written for declared step " + name);
+            // The probe's own steps, which are declared in SignEditProbe and read
+            // its own recordings. It throws for a name it does not know, so a step
+            // that is declared in neither list still fails by name.
+            default -> probe.body(name);
         }
     }
 

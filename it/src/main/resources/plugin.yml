@@ -8,7 +8,13 @@ description: ${project.description}
 # Hard dependency, not soft: if TradeShop is not on this server there is nothing
 # to assert, and a harness that quietly runs zero scenarios is the failure mode
 # this whole tier exists to close.
-depend: [TradeShop]
+#
+# BKCommonLib for the same reason, and it is not inherited from TradeShop's own
+# depend: a plugin only sees the classes of the plugins it names itself. The
+# sign-edit probe listens for com.bergerkiller.bukkit.common.events
+# .SignEditTextEvent, and without this line registering that listener is a
+# NoClassDefFoundError at enable rather than a suite that runs.
+depend: [TradeShop, BKCommonLib]
 
 # How the tier-3 bot reports what it just did. The bot acts and this command
 # makes the harness assert; the bot never asserts anything about server state.

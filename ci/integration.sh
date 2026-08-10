@@ -110,7 +110,15 @@ BKCL_SHA256=e7b15d76898834a0b7e8a080982a3f24c69b4a82e87a1e5ec29bce8d17045c46
 # 41 -> 42 with The cost side, the cost side a shop loses the first time it is read off disk.
 #          That one was not in the review: it was noticed as `cost: []` in a shop file
 #          left behind by a run, characterised afterwards, and pinned here.
-EXPECTED_SCENARIOS=42
+#
+# 42 -> 51 with the sign-edit probe: nine client-driven rows asking whether
+#          BKCommonLib's SignEditTextEvent can replace the two guards that hold a
+#          shop sign shut. They are a MEASUREMENT and not a defect list - a green
+#          run here means the event behaves as these rows say it does, which is
+#          the answer whether or not it is the answer anybody wanted. Two of them
+#          pin behaviour that reads as backwards and is: on Paper the PLACE and
+#          EDIT reasons are swapped. See it/SignEditProbe.java.
+EXPECTED_SCENARIOS=51
 
 # Tier 3. The client is not optional: a run that boots a server, plays nothing
 # and exits 0 is the vacuous pass this project treats as the worst possible

@@ -112,7 +112,7 @@ function connect (username) {
       checkTimeoutInterval: 60000
     })
 
-    bot.harness = { replies: [], site: null, ended: null }
+    bot.harness = { replies: [], site: null, probe: {}, ended: null }
     sessions.push(bot)
 
     bot.on('message', (message) => {
@@ -126,6 +126,18 @@ function connect (username) {
         bot.harness.site = {
           chest: new Vec3(Number(site[1]), Number(site[2]), Number(site[3])),
           header: site[4]
+        }
+      }
+
+      // The sign-edit probe's sites, one line each. The kind word says what the
+      // position is - a CHEST gets a chest with a sign on top of it, a SIGN gets
+      // a sign on the ground - so the client never has to hold an opinion about
+      // what the harness meant by a coordinate.
+      const probe = /^TS-IT PROBE (\w+) (\w+) (-?\d+) (-?\d+) (-?\d+)$/.exec(text)
+      if (probe) {
+        bot.harness.probe[probe[1]] = {
+          kind: probe[2],
+          pos: new Vec3(Number(probe[3]), Number(probe[4]), Number(probe[5]))
         }
       }
     })
@@ -201,6 +213,48 @@ async function hold (bot, itemName) {
   const item = bot.registry.itemsByName[itemName]
   if (!item) throw new Failed(`this Minecraft version has no item called ${itemName}`)
   await bot.equip(item.id, 'hand')
+}
+
+/**
+ * Selects an empty hotbar slot, so the next right-click is an empty-handed one.
+ *
+ * A sign opens its editor from the block's own interaction, which an item in
+ * hand can pre-empt: dye, glow ink and honeycomb are all handled before the
+ * editor is ever reached. Right-clicking with nothing held is what a person does
+ * when they mean to edit a sign, so it is what the client does here.
+ */
+async function emptyHand (bot) {
+  const empty = [0, 1, 2, 3, 4, 5, 6, 7, 8].find((slot) => !bot.inventory.slots[36 + slot])
+  if (empty === undefined) {
+    throw new Failed('every hotbar slot is full, so the client cannot right-click empty-handed')
+  }
+  bot.setQuickBarSlot(empty)
+  await bot.waitForTicks(5)
+  if (bot.heldItem) {
+    throw new Failed(`hotbar slot ${empty} was supposed to be empty and holds ${bot.heldItem.name}`)
+  }
+}
+
+/**
+ * Moves the client to a position, using the op'd session's own /tp.
+ *
+ * The probe has four sites in one chunk and the bot has to stand at each of
+ * them, including on both sides of one sign. Walking there is a pathfinder this
+ * project does not have and would have to keep; a teleport is one command a real
+ * connected client sends and the server performs, and being op is already part
+ * of the fixture this bot arrives with.
+ *
+ * Waits for the server to say the move happened rather than for a duration: a
+ * placement sent from a position the server has not applied yet is dropped for
+ * being out of reach, with nothing logged at either end.
+ */
+async function teleport (bot, x, y, z) {
+  const target = new Vec3(x, y, z)
+  say('teleporting to', target.toString())
+  bot.chat(`/tp @s ${x} ${y} ${z}`)
+  await until(`the server to move ${bot.username} to ${target.toString()}`,
+    () => bot.entity.position.distanceTo(target) < 1.0)
+  await bot.waitForTicks(5)
 }
 
 /**
@@ -389,6 +443,162 @@ async function play () {
   await owner.waitForTicks(5)
 
   await step(owner, 'aHeldComplexItemBecomesTheProductAndRenders')
+
+  // ---- The sign-edit probe. ------------------------------------------------
+  //
+  // Whether BKCommonLib's SignEditTextEvent can hold a shop sign shut. Every
+  // action below is one a person performs - place a sign and type it, right-click
+  // an existing shop sign to open its editor, submit what is in the editor, put
+  // dye and glow ink on a sign, write its back - and it/SignEditProbe.java says
+  // what fired for each. See that file for what is being asked and why.
+  const sites = await until('the harness to say where the probe sites are',
+    () => (owner.harness.probe.SHOP && owner.harness.probe.PLAIN &&
+           owner.harness.probe.BACK && owner.harness.probe.PICK)
+      ? owner.harness.probe
+      : null)
+  say('probe sites: shop chest', sites.SHOP.pos.toString(),
+    '| plain sign', sites.PLAIN.pos.toString(),
+    '| back-side chest', sites.BACK.pos.toString(),
+    '| pre-written sign', sites.PICK.pos.toString())
+
+  // Nothing to perform: the sign this asserts about is the one typed at the top
+  // of this run, which is the point - the event either fired for a sign edit
+  // nothing arranged for it, or it did not fire.
+  await step(owner, 'signEditTextEventFiresForAPlacedSignAndCallsItAnEdit')
+
+  // A second shop, left unstocked. TradeShop's trade listener returns before its
+  // own setCancelled(true) when a shop is out of stock, so the interaction is not
+  // denied and the vanilla sign editor can open over it - which is the state
+  // issue #152 describes and the only state this probe can watch it from.
+  const shopChest = sites.SHOP.pos
+  const shopSign = shopChest.offset(0, 1, 0)
+  await teleport(owner, shopChest.x + 1.5, shopChest.y, shopChest.z + 0.5)
+  await hold(owner, 'chest')
+  await placeOnTopOf(owner, shopChest.offset(0, -1, 0))
+  await hold(owner, 'oak_sign')
+  await placeOnTopOf(owner, shopChest, { sneak: true })
+  const probeShopSign = await until('the probe shop sign to appear',
+    () => { const b = owner.blockAt(shopSign); return b && b.name.endsWith('sign') ? b : null })
+  say('typing the sign:', [site.header, '1 DIAMOND', '1 EMERALD'].join(' | '))
+  owner.updateSign(probeShopSign, `${site.header}\n1 DIAMOND\n1 EMERALD\n`)
+  await owner.waitForTicks(5)
+
+  await emptyHand(owner)
+  await face(owner, shopSign)
+  say('right-clicking the shop sign with an empty hand, which opens the vanilla editor')
+  await owner.activateBlock(owner.blockAt(shopSign))
+  await owner.waitForTicks(5)
+
+  await step(owner, 'openingTheEditorOnAShopSignFiresNoSignEditTextEvent')
+
+  // And submit text out of the editor that is now open on the client.
+  say('typing the sign: PROBEEDIT, into the editor that is open on the shop sign')
+  owner.updateSign(owner.blockAt(shopSign), 'PROBEEDIT one\nPROBEEDIT two\nPROBEEDIT three\n')
+  await owner.waitForTicks(5)
+
+  await step(owner, 'theSubmittedEditorTextFiresSignEditTextEventAndCallsItAPlace')
+
+  // A sign that is not a shop, so that cancelling can be measured with
+  // TradeShop's own sign guards out of the way. CANCELME is the client telling
+  // the probe to cancel this one.
+  const plainSign = sites.PLAIN.pos
+  await teleport(owner, plainSign.x + 1.5, plainSign.y, plainSign.z + 0.5)
+  await hold(owner, 'oak_sign')
+  await placeOnTopOf(owner, plainSign.offset(0, -1, 0))
+  const plain = await until('the plain probe sign to appear',
+    () => { const b = owner.blockAt(plainSign); return b && b.name.endsWith('sign') ? b : null })
+  say('typing the sign: CANCELME, onto a sign the probe is told to refuse')
+  owner.updateSign(plain, 'CANCELME place\nsecond\nthird\n')
+  await owner.waitForTicks(5)
+
+  await step(owner, 'cancellingSignEditTextEventOnAPlacedSignLeavesItBlank')
+
+  // The control and the cancelled edit, on one sign: text that lands, and then
+  // an edit of that same sign that the probe refuses. Without the control,
+  // "the sign still says what it said" cannot be told apart from an edit that
+  // never arrived.
+  const backChest = sites.BACK.pos
+  const backSign = backChest.offset(0, 1, 0)
+  await teleport(owner, backChest.x + 1.5, backChest.y, backChest.z + 0.5)
+  await hold(owner, 'chest')
+  await placeOnTopOf(owner, backChest.offset(0, -1, 0))
+  await hold(owner, 'oak_sign')
+  await placeOnTopOf(owner, backChest, { sneak: true })
+  const control = await until('the control sign to appear',
+    () => { const b = owner.blockAt(backSign); return b && b.name.endsWith('sign') ? b : null })
+  say('typing the sign: PROBEKEEP, the control the probe does not refuse')
+  owner.updateSign(control, 'PROBEKEEP one\nkeep two\nkeep three\n')
+  await owner.waitForTicks(5)
+
+  await emptyHand(owner)
+  await face(owner, backSign)
+  say('right-clicking the control sign with an empty hand, to open its editor')
+  await owner.activateBlock(owner.blockAt(backSign))
+  await owner.waitForTicks(5)
+  say('typing the sign: CANCELME, into the control sign\'s open editor')
+  owner.updateSign(owner.blockAt(backSign), 'CANCELME edit\nrefused two\nrefused three\n')
+  await owner.waitForTicks(5)
+
+  await step(owner, 'cancellingSignEditTextEventOnAnEditLeavesTheOldText')
+
+  // Two ways of changing a sign that never touch its text.
+  await teleport(owner, shopChest.x + 1.5, shopChest.y, shopChest.z + 0.5)
+  await face(owner, shopSign)
+  await hold(owner, 'red_dye')
+  say('right-clicking the shop sign with red dye')
+  await owner.activateBlock(owner.blockAt(shopSign))
+  await owner.waitForTicks(5)
+  await hold(owner, 'glow_ink_sac')
+  say('right-clicking the shop sign with a glow ink sac')
+  await owner.activateBlock(owner.blockAt(shopSign))
+  await owner.waitForTicks(5)
+
+  await step(owner, 'dyeAndGlowInkOnAShopSignFireNoSignEditTextEvent')
+
+  // The same click again with a different colour, which the probe denies the way
+  // the interact guard would. Whether the deny holds is a question about the
+  // server, so the sign's colour afterwards is the answer and it/ reads it.
+  await hold(owner, 'blue_dye')
+  say('right-clicking the shop sign with blue dye, which the probe denies')
+  await owner.activateBlock(owner.blockAt(shopSign))
+  await owner.waitForTicks(5)
+
+  await step(owner, 'anInteractDenyStopsTheDyeThatTheTextEventNeverSaw')
+
+  // The back of a sign. Which side the editor opens on is decided by where the
+  // player is standing, so the client walks - teleports - around to the other
+  // side of the sign it wrote the front of.
+  await teleport(owner, backChest.x - 1.5, backChest.y, backChest.z + 0.5)
+  await emptyHand(owner)
+  await face(owner, backSign)
+  say('right-clicking the sign from behind, which opens the editor on its back')
+  await owner.activateBlock(owner.blockAt(backSign))
+  await owner.waitForTicks(5)
+  say('typing the sign:', [site.header, '1 DIAMOND', '1 EMERALD'].join(' | '), 'on the BACK')
+  owner.updateSign(owner.blockAt(backSign), `${site.header}\n1 DIAMOND\n1 EMERALD\n`, true)
+  await owner.waitForTicks(10)
+
+  await step(owner, 'theBackOfASignFiresForTheBackSideAndCreatesAShopNoClickCanReach')
+
+  // A sign that arrives with its text already on it. Nothing is typed here and no
+  // editor opens; the whole action is one placement.
+  //
+  // In creative, because that is what ctrl-picking is: a survival placement of a
+  // sign item carrying block entity data drops the data on the floor - MEASURED,
+  // the item read back as [PROBEPICK, already written, , ] and the placed block
+  // read back blank - so a survival run would have been asking a different
+  // question and getting a blank sign to look at.
+  const pickSign = sites.PICK.pos
+  await teleport(owner, pickSign.x + 1.5, pickSign.y, pickSign.z + 0.5)
+  say('switching to creative, which is the only mode a ctrl-picked sign is placed from')
+  owner.chat('/gamemode creative')
+  await owner.waitForTicks(10)
+  await hold(owner, 'spruce_sign')
+  say('placing a sign that already carries its own text')
+  await placeOnTopOf(owner, pickSign.offset(0, -1, 0))
+  await owner.waitForTicks(5)
+
+  await step(owner, 'placingASignThatAlreadyCarriesTextFiresCtrlPickPlace')
 
   return owner
 }
