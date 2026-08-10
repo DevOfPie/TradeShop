@@ -103,8 +103,19 @@ public enum ShopItemStackSettingKeys {
 
     }
 
+    /**
+     * The server-wide default for this setting.
+     *
+     * <p>Falls back to the value compiled into this enum when the config file has no
+     * answer. A hole in {@code shop-per-item-settings} used to produce a holder with
+     * nothing in it, and every caller of this method reads it as a boolean or an int:
+     * the boolean path threw and the int path handed back a null that was unboxed. The
+     * fallback is the same value the file would have held, so a hole now costs nothing
+     * beyond the operator's own override of it.
+     */
     public ObjectHolder<?> getDefaultValue() {
-        return new ObjectHolder<>(Setting.SHOP_PER_ITEM_SETTINGS.getMappedObject(getConfigName() + "." + defaultKey));
+        Object configured = Setting.SHOP_PER_ITEM_SETTINGS.getMappedObject(getConfigName() + "." + defaultKey);
+        return new ObjectHolder<>(configured != null ? configured : preConfigDefault);
     }
 
     public ItemStack getDisplayItem() {
