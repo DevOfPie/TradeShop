@@ -496,8 +496,18 @@ $(cat "$MARKER")"
 $(cat "$MARKER")"
 
     failures=$(grep '^SCENARIO .* FAIL' "$MARKER" || true)
+    # The stacks come out of the console rather than the result file: a result line
+    # is counted and asserted against EXPECTED_SCENARIOS, so it has to stay one
+    # line, and one line is not enough to find a fault by. This block is why - a
+    # ClassCastException raised inside the plugin used to reach CI as its message
+    # and nothing else, which named no file and no line and could not be worked
+    # from at all. IntegrationPlugin.recordStack writes one console record per
+    # frame, each carrying the "FAIL " prefix that check_console excludes.
     [ -z "$failures" ] || die "scenarios failed:
-$failures"
+$failures
+
+and the stacks they were thrown from:
+$(grep '\[TradeShopIT\] FAIL ' "$CONSOLE" 2>/dev/null || echo '(the console recorded none)')"
 
     say "$ran/$EXPECTED_SCENARIOS scenarios passed:"
     sed 's/^/[integration]   /' "$MARKER"

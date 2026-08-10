@@ -885,7 +885,7 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
             // Reported rather than thrown: one broken scenario must not stop the
             // rest from running, and the runner needs the result file to exist
             // in order to tell a failure from a run that never happened.
-            getLogger().warning("FAIL " + scenario.name() + ": " + describe(t));
+            recordStack(scenario.name(), t);
             return "FAIL " + describe(t);
         }
     }
@@ -900,10 +900,92 @@ public final class IntegrationPlugin extends JavaPlugin implements Listener {
         }
     }
 
+    /**
+     * A failed scenario in one line, with the place the failure was thrown.
+     *
+     * <p>This used to be {@code t.getMessage()} and nothing else, and that is
+     * exactly what a CI-only failure cannot be diagnosed from: the result file is
+     * the only thing {@code ci/integration.sh} prints when a scenario fails, so a
+     * {@link ClassCastException} raised three frames inside the plugin arrived in
+     * the CI log as a sentence with no class, no method and no line number in it.
+     *
+     * <p>The cause chain is walked because {@link Sync#get} wraps whatever the
+     * server thread threw in an {@code AssertionError} whose message is the
+     * cause's {@code toString()}: the wrapper's stack is the harness waiting, and
+     * the cause's is the defect. Everything stays on ONE line - the runner counts
+     * {@code SCENARIO} lines in the result file and asserts the total, so a stack
+     * spread over forty of them would make the suite look forty scenarios longer
+     * and fail on the count instead. The whole stack goes to the console; see
+     * {@link #recordStack}.
+     */
     String describe(Throwable t) {
-        String message = t.getMessage();
-        String detail = (message == null || message.isEmpty()) ? t.toString() : message;
-        return detail.replace('\n', ' ').replace('\r', ' ');
+        StringBuilder detail = new StringBuilder();
+
+        Throwable cur = t;
+        for (int depth = 0; cur != null && depth < 8 && detail.length() < 600; depth++, cur = nextCause(cur)) {
+            if (depth > 0) detail.append(" <- caused by ");
+            String message = cur.getMessage();
+            detail.append(message == null || message.isEmpty() ? cur.toString() : message)
+                    .append(" [at ").append(origin(cur)).append(']');
+        }
+
+        return detail.toString().replace('\n', ' ').replace('\r', ' ');
+    }
+
+    /**
+     * Where a throwable came from, short enough to sit in a result line: the frame
+     * that threw, and the first frame belonging to this project so that a failure
+     * raised inside a library still names the call that reached it.
+     */
+    private static String origin(Throwable t) {
+        StackTraceElement[] frames = t.getStackTrace();
+        if (frames.length == 0) {
+            return "no stack";
+        }
+
+        StringBuilder where = new StringBuilder(frames[0].toString());
+        for (StackTraceElement frame : frames) {
+            if (frame.getClassName().startsWith("org.shanerx.tradeshop")) {
+                if (frame != frames[0]) {
+                    where.append(" <- ").append(frame);
+                }
+                break;
+            }
+        }
+        return where.toString();
+    }
+
+    /**
+     * The full stack of a failed scenario, on the console, one log record per
+     * frame.
+     *
+     * <p>One record per frame rather than one multi-line message because
+     * {@code ci/integration.sh} fails the run on any console line containing
+     * "Exception" and excludes exactly the lines this plugin prefixes with
+     * {@code FAIL }. A logger writes its prefix once, so a stack handed over as a
+     * single message would arrive as forty unprefixed lines and turn a failed
+     * scenario into a failed server.
+     */
+    void recordStack(String name, Throwable t) {
+        getLogger().warning("FAIL " + name + ": " + describe(t));
+
+        Throwable cur = t;
+        for (int depth = 0; cur != null && depth < 8; depth++, cur = nextCause(cur)) {
+            getLogger().warning("FAIL " + name + ": " + (depth == 0 ? "thrown: " : "caused by: ") + cur);
+            for (StackTraceElement frame : cur.getStackTrace()) {
+                getLogger().warning("FAIL " + name + ":     at " + frame);
+            }
+        }
+    }
+
+    /**
+     * The next link in a cause chain, or null at the end of it. Guards the
+     * self-referencing cause that a badly built exception can carry, because a
+     * harness that hangs while reporting a failure reports nothing at all.
+     */
+    private static Throwable nextCause(Throwable t) {
+        Throwable cause = t.getCause();
+        return cause == t ? null : cause;
     }
 
     void writeResult(List<String> lines) {
