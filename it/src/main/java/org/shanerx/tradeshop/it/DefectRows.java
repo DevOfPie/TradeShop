@@ -18,6 +18,7 @@ package org.shanerx.tradeshop.it;
 
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
+import org.bukkit.block.Container;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
 import org.bukkit.event.block.Action;
@@ -36,6 +37,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -239,7 +241,124 @@ final class DefectRows {
                     "and an unlinked chest must stop reading as a shop chest to every path that asks");
         }));
 
+        // ------------------------------------------------------------------
+        // The five-slot-storage defect. Two of the ten storage types a shop may be built on hold five
+        // slots, and five is not a multiple of nine.
+        //
+        // Shop.java:740 and Utils.java:430 both pass a raw
+        // getStorageContents().length to Bukkit.createInventory, which takes a
+        // multiple of nine up to 54 and throws otherwise. A hopper and a brewing
+        // stand are both five, and ShopStorage.Storages lists both - HOPPER at
+        // :94, BREWING_STAND at :89 - so an operator who adds either to
+        // allowed-shops gets a shop that cannot count its own stock, let alone
+        // sell any. Measured here, from this server:
+        // "Size for custom inventory must be a multiple of 9 between 9 and 54
+        // slots (got 5)".
+        //
+        // Utils.java:415 does the same arithmetic to the PLAYER's inventory. That
+        // one is 36 slots on this server and therefore safe today; it is named
+        // here rather than tested, because a test for it would be asserting the
+        // size of a vanilla inventory rather than a decision this plugin makes.
+        // ------------------------------------------------------------------
+        rows.add(new IntegrationPlugin.Scenario("aShopOnAHopperCanCountItsStockAndTrade", () -> {
+            Object allowed = Setting.ALLOWED_SHOPS.getSetting();
+            RealShop scene = new RealShop(plugin, FIRST_SITE + 3);
+
+            try {
+                allowStorage(scene, "HOPPER");
+                scene.placeStorageAndSign(Material.HOPPER, Material.OAK_SIGN);
+
+                Assert.equal(5, storageSlots(scene),
+                        "precondition: a hopper holds five slots, and Bukkit.createInventory takes a "
+                                + "multiple of nine");
+                Assert.that(scene.get(() -> tradeShop().getListManager().isInventory(scene.chestBlock())),
+                        "precondition: the server was told a hopper may carry a shop");
+
+                try {
+                    scene.createShopByCommand("1 DIAMOND", "1 EMERALD");
+                } catch (Throwable t) {
+                    throw new AssertionError("a shop on a hopper should be created like any other, and "
+                            + "creating one threw: " + rootCause(t) + ". Shop.java:740 builds a counting "
+                            + "inventory the size of the storage block, and a hopper is five slots", t);
+                }
+
+                Shop shop = scene.get(() -> Shop.loadShop(new ShopLocation(scene.signBlock().getLocation())));
+                Assert.that(shop != null, "a shop on a hopper should have been stored at the sign");
+
+                scene.stockShop(new ItemStack(Material.DIAMOND, 10));
+                scene.run(shop::updateFullTradeCount);
+                Assert.equal(10, shop.getAvailableTrades(),
+                        "ten diamonds at one per trade is ten trades on a hopper as much as on a chest");
+
+                Player hopperBuyer = scene.buyerHolding(new ItemStack(Material.EMERALD, 5));
+                try {
+                    scene.run(() -> new Utils().canExchangeAll(shop, hopperBuyer.getInventory(), 1,
+                            Action.RIGHT_CLICK_BLOCK));
+                } catch (Throwable t) {
+                    throw new AssertionError("a buyer must be able to trade with a hopper shop, and the "
+                            + "gate threw: " + rootCause(t) + " - Utils.java:430 copies the shop's storage "
+                            + "into an inventory of the storage block's own slot count", t);
+                }
+            } finally {
+                restoreAllowedShops(plugin, allowed);
+            }
+        }));
+
+        rows.add(new IntegrationPlugin.Scenario("aShopOnABrewingStandCanBeCreated", () -> {
+            Object allowed = Setting.ALLOWED_SHOPS.getSetting();
+            RealShop scene = new RealShop(plugin, FIRST_SITE + 4);
+
+            try {
+                allowStorage(scene, "BREWING_STAND");
+                scene.placeStorageAndSign(Material.BREWING_STAND, Material.OAK_SIGN);
+
+                Assert.equal(5, storageSlots(scene),
+                        "precondition: a brewing stand is the second permitted five-slot storage type");
+                Assert.that(scene.get(() -> tradeShop().getListManager().isInventory(scene.chestBlock())),
+                        "precondition: the server was told a brewing stand may carry a shop");
+
+                try {
+                    scene.createShopByCommand("1 DIAMOND", "1 EMERALD");
+                } catch (Throwable t) {
+                    throw new AssertionError("a shop on a brewing stand should be created like any other, "
+                            + "and creating one threw: " + rootCause(t) + ". ShopStorage.Storages:89 "
+                            + "permits it and Shop.java:740 cannot count its five slots", t);
+                }
+
+                Assert.that(scene.get(() -> Shop.loadShop(new ShopLocation(scene.signBlock().getLocation()))) != null,
+                        "a shop on a brewing stand should have been stored at the sign");
+            } finally {
+                restoreAllowedShops(plugin, allowed);
+            }
+        }));
+
         return rows;
+    }
+
+    // ------------------------------------------------------------------
+    // Scene helpers
+    // ------------------------------------------------------------------
+
+    /** Adds one storage type to allowed-shops and makes the running plugin notice. */
+    private static void allowStorage(RealShop scene, String storage) {
+        scene.run(() -> {
+            List<String> allowed = new ArrayList<>(Arrays.asList("CHEST", "TRAPPED_CHEST", "SHULKER"));
+            allowed.add(storage);
+            Setting.ALLOWED_SHOPS.setValue(allowed);
+            tradeShop().getListManager().reload();
+        });
+    }
+
+    private static void restoreAllowedShops(IntegrationPlugin plugin, Object allowed) {
+        Sync.run(plugin, () -> {
+            Setting.ALLOWED_SHOPS.setValue(allowed);
+            tradeShop().getListManager().reload();
+        });
+    }
+
+    private static int storageSlots(RealShop scene) {
+        return scene.get(() -> ((Container) scene.chestBlock().getState())
+                .getInventory().getStorageContents().length);
     }
 
     private static TradeShop tradeShop() {
