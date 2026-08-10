@@ -17,8 +17,13 @@
 package org.shanerx.tradeshop.it;
 
 import org.bukkit.Bukkit;
+import org.bukkit.Location;
 import org.bukkit.Material;
+import org.bukkit.World;
+import org.bukkit.block.Block;
+import org.bukkit.block.BlockFace;
 import org.bukkit.block.Container;
+import org.bukkit.block.data.type.Chest;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
 import org.bukkit.event.block.Action;
@@ -45,10 +50,22 @@ import java.util.List;
  *
  * <h2>Why every one of them is here and not in {@code src/test}</h2>
  * Each turns on something MockBukkit does not have, rather than on something it
- * does differently. The first is a real {@code config.yml} on disk, read back
- * through {@code ConfigManager.reload()} - the same call {@code TradeShop.onEnable}
- * makes at {@code TradeShop.java:140}. The defect is what the repair does to a
- * file, so a test with no file proves nothing about it.
+ * does differently:
+ *
+ * <ul>
+ *   <li><b>Config repair</b> is a real {@code config.yml} on disk, read back through
+ *       {@code ConfigManager.reload()} - the same call {@code TradeShop.onEnable}
+ *       makes at {@code TradeShop.java:140}. The defect is what the repair does
+ *       to a file, so a test with no file proves nothing about it.</li>
+ *   <li><b>Chest linkage</b> is a linkage map written to and read from a real JSON file,
+ *       keyed by a world a real server named.</li>
+ *   <li><b>Five-slot storage</b> is {@code Bukkit.createInventory}'s own size rule - CraftBukkit
+ *       refuses anything that is not a multiple of nine - applied to the real slot
+ *       count of a real hopper.</li>
+ *   <li><b>Double chests</b> needs a real double chest. MockBukkit has no
+ *       {@code DoubleChest}, so {@code ShopChest.isDoubleChest} is false there and
+ *       the branch under test is never entered at all.</li>
+ * </ul>
  *
  * <p>Every row asserts what an operator is entitled to, so a red row is the
  * defect and a green row is the fix. None of them is written to pass today.
@@ -332,12 +349,111 @@ final class DefectRows {
             }
         }));
 
+        // ------------------------------------------------------------------
+        // The double-chest defect. A double chest laid along the Z axis resolves to the wrong half.
+        //
+        // ShopChest.getOtherHalfOfDoubleChest:101-115. The X branch at :107 asks
+        // `check.getX() == floor(chestLoc.getX())`, which is the right question.
+        // The Z branch at :109 asks `check.getX() == floor(chestLoc.getZ())` - an
+        // X compared against a Z. The two agree only where the chest happens to
+        // sit on the diagonal, so one of the two halves always resolves to
+        // itself, and which one depends on the coordinates.
+        //
+        // MEASURED here: the pair at x=25000, z=0 and z=1 has its combined
+        // inventory at z=0.5, so floor(z) is 0 while check.getX() is 25000, the
+        // comparison is false, and the left half is told its other half is the
+        // left half.
+        //
+        // Only reachable with a real double chest: MockBukkit has no DoubleChest,
+        // so isDoubleChest is false there and this method is never entered at all.
+        // ------------------------------------------------------------------
+        rows.add(new IntegrationPlugin.Scenario("bothHalvesOfAZAxisDoubleChestResolveToEachOther", () -> {
+            Block[] halves = doubleChest(plugin, FIRST_SITE + 5, false);
+            Block left = halves[0], right = halves[1];
+
+            Assert.that(Sync.get(plugin, () -> ShopChest.isDoubleChest(left)),
+                    "precondition: the server built one double chest out of the two blocks");
+
+            Assert.equal(right, Sync.get(plugin, () -> ShopChest.getOtherHalfOfDoubleChest(left)),
+                    "the other half of the left block is the right block - ShopChest.java:109 compares "
+                            + "check.getX() against chestLoc.getZ()");
+            Assert.equal(left, Sync.get(plugin, () -> ShopChest.getOtherHalfOfDoubleChest(right)),
+                    "and the other half of the right block is the left block");
+        }));
+
+        rows.add(new IntegrationPlugin.Scenario("bothHalvesOfAnXAxisDoubleChestResolveToEachOther", () -> {
+            Block[] halves = doubleChest(plugin, FIRST_SITE + 6, true);
+            Block left = halves[0], right = halves[1];
+
+            Assert.that(Sync.get(plugin, () -> ShopChest.isDoubleChest(left)),
+                    "precondition: the server built one double chest out of the two blocks");
+
+            // The control, and it is expected to be GREEN. It is here so that a red
+            // Z row reads as "the Z branch is wrong" rather than "double chests are
+            // broken", and because it answers the second half of the report:
+            // ShopChest.java:105 takes two references from
+            // getInventory().getLocation(), and if a server handed out the SAME
+            // object twice, :107's setX would move the value :107 is still reading.
+            // Paper 1.21.11 hands out two, so that half does not reproduce - and
+            // this row is what will say so if a future server changes its mind.
+            Assert.equal(right, Sync.get(plugin, () -> ShopChest.getOtherHalfOfDoubleChest(left)),
+                    "the other half of the left block is the right block");
+            Assert.equal(left, Sync.get(plugin, () -> ShopChest.getOtherHalfOfDoubleChest(right)),
+                    "and the other half of the right block is the left block");
+        }));
+
         return rows;
     }
 
     // ------------------------------------------------------------------
     // Scene helpers
     // ------------------------------------------------------------------
+
+    /**
+     * Two chest blocks the server has joined into one double chest.
+     *
+     * <p>Vanilla joins two chests when their facings agree and their halves point
+     * at each other: the partner of a LEFT chest is clockwise of its facing and of
+     * a RIGHT chest counter-clockwise. A north-facing pair therefore runs along X
+     * and an east-facing pair along Z, which is the only reason the facing differs
+     * between the two cases.
+     *
+     * @param alongX true for a pair laid along X, false for one laid along Z
+     * @return the LEFT half and the RIGHT half, in that order
+     */
+    private static Block[] doubleChest(IntegrationPlugin plugin, int site, boolean alongX) {
+        return Sync.get(plugin, () -> {
+            World world = Bukkit.getWorlds().get(0);
+            int x = site * 1000;
+
+            BlockFace facing = alongX ? BlockFace.NORTH : BlockFace.EAST;
+
+            Block left = world.getBlockAt(x, 0, 0);
+            Block right = alongX ? world.getBlockAt(x + 1, 0, 0) : world.getBlockAt(x, 0, 1);
+
+            left.setType(Material.CHEST, false);
+            right.setType(Material.CHEST, false);
+
+            setHalf(left, facing, Chest.Type.LEFT);
+            setHalf(right, facing, Chest.Type.RIGHT);
+
+            // Logged because it is the number the Z branch gets wrong, and reading
+            // it out of a run is worth more than deriving it from the source.
+            Location inventoryAt = ((Container) left.getState()).getInventory().getLocation();
+            Bukkit.getLogger().info("[harness] double chest along " + (alongX ? "X" : "Z")
+                    + ": left " + left.getLocation().toVector() + ", right " + right.getLocation().toVector()
+                    + ", combined inventory at " + (inventoryAt == null ? "null" : inventoryAt.toVector()));
+
+            return new Block[]{left, right};
+        });
+    }
+
+    private static void setHalf(Block block, BlockFace facing, Chest.Type half) {
+        Chest data = (Chest) block.getBlockData();
+        data.setFacing(facing);
+        data.setType(half);
+        block.setBlockData(data, false);
+    }
 
     /** Adds one storage type to allowed-shops and makes the running plugin notice. */
     private static void allowStorage(RealShop scene, String storage) {
