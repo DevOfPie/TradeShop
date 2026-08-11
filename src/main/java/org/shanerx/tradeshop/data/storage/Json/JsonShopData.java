@@ -149,14 +149,22 @@ public class JsonShopData extends JsonConfiguration implements ShopConfiguration
 
     @Override
     protected void loadFile() {
+        // Json's constructor creates the file it is handed - a keyless "{}" -
+        // before anything has a shop to write into it, so every chunk a search
+        // merely looked at kept a file. The emptiness test is the loaded data,
+        // not the byte count, because "{}" is 3 bytes. Dropping it also
+        // uncovers the legacy branch below, whose !isFile() guard the eager
+        // create otherwise holds false forever.
+        if (file.isFile() && getFileData().toMap().isEmpty()) file.delete();
 
         if (!this.file.isFile()) {
-            // If could not find file try with old separators
-            String oldFile = file.getPath() + File.separator + chunk.serialize().replace(";;", "_") + ".json";
-            if (new File(oldFile).isFile()) new File(oldFile).renameTo(file);
+            // If could not find file try with old separators. Runs from the
+            // superclass constructor, so no field of this class is assigned
+            // yet - the old name has to come from the file's own, not `chunk`.
+            File oldFile = new File(file.getParentFile(), file.getName().replace(";;", "_"));
+            if (!(oldFile.isFile() && oldFile.renameTo(file))) return;
+            forceReload();
         }
-
-        String data = "";
 
         try {
             for (Map.Entry<String, Object> entry : readToMap().entrySet()) {

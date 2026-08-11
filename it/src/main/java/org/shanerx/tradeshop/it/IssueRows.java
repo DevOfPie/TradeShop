@@ -79,7 +79,7 @@ final class IssueRows {
      * both once wrote a comment exactly like this one claiming 30, and neither
      * comment named the other.
      */
-    private static final SiteAllocator.Reservation SITE = SiteAllocator.reserve("IssueRows", 10);
+    private static final SiteAllocator.Reservation SITE = SiteAllocator.reserve("IssueRows", 11);
 
     static List<IntegrationPlugin.Scenario> rows(IntegrationPlugin plugin) {
         List<IntegrationPlugin.Scenario> rows = new ArrayList<>();
@@ -415,6 +415,39 @@ final class IssueRows {
             Assert.that(!openSign(plain, plain.owner(), Side.FRONT),
                     "an ordinary sign must still open its editor, or this protection is a "
                             + "server-wide ban on writing signs");
+        }));
+
+        // ------------------------------------------------------------------
+        // Upstream #155 - "/ts who error in log".
+        //
+        // Reported 2023-07-17 against 2.6.1-DEV as an unhandled CommandException,
+        // and fixed before this project existed: upstream PR #156 (the 2.6.1 RC)
+        // carries fb6f496, whose message names the plausible mechanism -
+        // ShopLocation#serialize switched to the world name string "to prevent
+        // npe/of thread access errors". This row is the other half of that
+        // close: the command answering, on a current build, on a real shop.
+        // ------------------------------------------------------------------
+
+        rows.add(new IntegrationPlugin.Scenario("tsWhoOnARealShopAnswersInsteadOfThrowing", () -> {
+            RealShop scene = new RealShop(plugin, SITE.at(10));
+            scene.placeChestAndSign();
+            scene.createShopByCommand("1 DIAMOND", "1 EMERALD");
+
+            try {
+                scene.dispatch("who");
+            } catch (Throwable t) {
+                throw new AssertionError("/tradeshop who threw on a shop its own owner is looking "
+                        + "at, which is upstream #155 still alive: " + t, t);
+            }
+
+            // The user-list header, not the owner's name: the name resolves
+            // through the server's offline-player cache, which a synthetic
+            // player who never joined is not in, so it reads "null" here and
+            // the player's real name on a real server.
+            Assert.that(HarnessPlayer.heardBy(scene.owner()).stream()
+                            .anyMatch(said -> said.contains("Shop users are")),
+                    "who must answer with the shop's user list - silence means the command "
+                            + "found no shop where its owner was looking");
         }));
 
         return rows;

@@ -37,6 +37,7 @@ import org.shanerx.tradeshop.item.ShopItemStack;
 import org.shanerx.tradeshop.player.ShopRole;
 import org.shanerx.tradeshop.shop.Shop;
 import org.shanerx.tradeshop.shop.ShopChest;
+import org.shanerx.tradeshop.shoplocation.ShopChunk;
 import org.shanerx.tradeshop.shoplocation.ShopLocation;
 import org.shanerx.tradeshop.utils.Utils;
 import org.shanerx.tradeshop.utils.objects.ObjectHolder;
@@ -88,7 +89,7 @@ final class DefectRows {
      * rather than agreed by comment - see that class for why a hand-typed range
      * stopped being trustworthy.
      */
-    private static final SiteAllocator.Reservation SITE = SiteAllocator.reserve("DefectRows", 10);
+    private static final SiteAllocator.Reservation SITE = SiteAllocator.reserve("DefectRows", 12);
 
     /**
      * The two players a shop is shared with. Fixed rather than random so that a
@@ -577,7 +578,102 @@ final class DefectRows {
                     "and it must come back with the member on it");
         }));
 
+        // ------------------------------------------------------------------
+        // The data folder is not a scratch pad.
+        //
+        // JsonConfiguration hands SimplixStorage's Json constructor a File, and
+        // that constructor calls create() on sight. So every chunk a search
+        // merely LOOKS at gained an empty .json file, and the boot validation
+        // then reported each one as unreadable JSON on every later start - on a
+        // plugin whose users have filed five separate issues about malformed
+        // JSON, a false alarm indistinguishable from the real thing.
+        //
+        // The legacy branch under it was dead three ways: the constructor had
+        // already created the new-format file, so its !isFile() guard was always
+        // false; the old-format path was built as file.getPath() + separator +
+        // name - a file inside a file - so it could never match; and it read a
+        // field of the subclass that is not assigned yet when the superclass
+        // constructor runs loadFile().
+        // ------------------------------------------------------------------
+
+        rows.add(new IntegrationPlugin.Scenario("searchingAShoplessChunkLeavesNoFileBehind", () -> {
+            RealShop scene = new RealShop(plugin, SITE.at(10));
+            // Blocks but no shop: setType fires no event, so nothing here writes
+            // to storage and the chunk legitimately has no data file.
+            scene.placeChestAndSign();
+
+            List<Shop> found = Sync.get(plugin, () ->
+                    tradeShop().getDataStorage().getMatchingShopsInChunk(
+                            scene.signBlock().getChunk().getChunkSnapshot(), false, null, null));
+
+            Assert.equal(0, found.size(), "a chunk nobody built a shop in has none to find");
+
+            File chunkFile = scene.get(() -> chunkFileOf(scene.signBlock()));
+            Assert.that(!chunkFile.isFile(),
+                    "searching a chunk with no shops must not create its data file - every chunk "
+                            + "/tradeshop find touches left an empty " + chunkFile.getName()
+                            + " behind, which the next boot's validation reported as unreadable JSON");
+        }));
+
+        rows.add(new IntegrationPlugin.Scenario("bootValidationSweepsAnEmptyChunkFileInsteadOfReportingIt", () -> {
+            File empty = Sync.get(plugin, () -> {
+                World world = Bukkit.getWorlds().get(0);
+                File folder = new File(tradeShop().getDataFolder(),
+                        "Data" + File.separator + world.getName());
+                folder.mkdirs();
+                File f = new File(folder, new ShopChunk(world, 31337, 31337).serialize() + ".json");
+                f.createNewFile();
+                return f;
+            });
+
+            boolean stillThere = Sync.get(plugin, () -> {
+                tradeShop().getDataStorage().validate();
+                return empty.isFile();
+            });
+
+            Assert.that(!stillThere,
+                    "a 0-byte chunk file stores nothing and is what searches used to leave behind; "
+                            + "boot validation must sweep it the way it already sweeps empty player "
+                            + "files, not report it as JSON that could not be repaired");
+        }));
+
+        rows.add(new IntegrationPlugin.Scenario("aShopInALegacyNamedChunkFileStillLoads", () -> {
+            RealShop scene = new RealShop(plugin, SITE.at(11));
+            scene.placeChestAndSign();
+            scene.createShopByCommand("1 DIAMOND", "1 EMERALD");
+
+            ShopLocation where = scene.get(() -> new ShopLocation(scene.signBlock().getLocation()));
+
+            // Rename the chunk file to its pre-2.6.2 name and evict the cached
+            // handle, so the next read has to find the shop the way a server
+            // upgraded from an old install would: off a file with the old name.
+            File current = scene.get(() -> chunkFileOf(scene.signBlock()));
+            File legacy = new File(current.getParentFile(), current.getName().replace(";;", "_"));
+            scene.run(() -> {
+                Assert.that(current.isFile(), "precondition: the shop's chunk file exists");
+                Assert.that(current.renameTo(legacy),
+                        "precondition: the chunk file could take its pre-2.6.2 name");
+                tradeShop().getDataStorage().dropShopData(new ShopChunk(scene.signBlock().getChunk()));
+            });
+
+            Shop reloaded = scene.get(() -> new DataStorage(DataType.FLATFILE).loadShopFromSign(where));
+
+            Assert.that(reloaded != null,
+                    "a shop stored under the old file name must still load");
+            Assert.equal(1, reloaded.getSideList(ShopItemSide.PRODUCT).size(),
+                    "and come back whole");
+            Assert.that(scene.get(() -> current.isFile() && !legacy.isFile()),
+                    "and the file must now carry the current name, so the migration runs once");
+        }));
+
         return rows;
+    }
+
+    /** The flat file a block's chunk is stored in, however the chunk is named. */
+    private static File chunkFileOf(Block block) {
+        return new File(tradeShop().getDataFolder(),
+                "Data" + File.separator + block.getWorld().getName() + File.separator
+                        + new ShopChunk(block.getChunk()).serialize() + ".json");
     }
 
     // ------------------------------------------------------------------

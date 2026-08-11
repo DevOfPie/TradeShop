@@ -125,6 +125,15 @@ public class DataStorage {
                         try {
                             String fileStr = FileUtils.readFileToString(f, StandardCharsets.UTF_8);
 
+                            // An empty chunk file stores nothing - it is what
+                            // searches used to leave behind in every chunk they
+                            // looked at. Swept like the empty player files
+                            // below, instead of reported as unrepairable JSON.
+                            if (fileStr.isEmpty()) {
+                                f.delete();
+                                return;
+                            }
+
                             // A file that parses is not broken, whatever it happens to
                             // contain. This test has to come first and has to be a parse:
                             // BROKEN_JSON_START looks for a '}' followed by more content,
