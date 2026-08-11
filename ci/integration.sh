@@ -169,7 +169,10 @@ BKCL_SHA256=${BKCL_SHA256:-e7b15d76898834a0b7e8a080982a3f24c69b4a82e87a1e5ec29bc
 # 62 -> 65 with allow-sign-break: the shop the setting leaves behind when its sign goes, the
 #          same thing for the owner's own break and an admin's, and the control that with the
 #          setting OFF the refusal, the owner's break and the admin's are the ones that shipped.
-EXPECTED_SCENARIOS=65
+# 65 -> 69 with the W6 close-out: three rows for the data-folder litter (a search
+#          must not create chunk files, boot validation sweeps a 0-byte file, a
+#          legacy-named file still loads) and /ts who answering on a real shop.
+EXPECTED_SCENARIOS=69
 
 # Tier 3. The client is not optional: a run that boots a server, plays nothing
 # and exits 0 is the vacuous pass this project treats as the worst possible
